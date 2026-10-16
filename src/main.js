@@ -20,6 +20,8 @@
  * lyrics_sync directory remains as a redirect stub for users with
  * bookmarks pointing at it.
  */
+import { freqToMidi, midiToName, yinDetect } from './pitch.js';
+
 (function () {
     'use strict';
 
@@ -651,69 +653,6 @@
     const _LK_SAMPLE_RING_CAP = 256;  // ~12 s at 50 ms cadence
     const _LK_STORAGE_KEY = 'lyrics_karaoke.micFeedback';
     const _LK_PITCH_LINE_COLOR = '#22d3ee';
-    const _LK_PITCH_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-    // Preallocated YIN working buffer reused across every 50ms detection
-    // frame to avoid per-frame Float32Array allocation / GC churn.
-    // Sized to cover tauMax at 96 kHz / 50 Hz (⌈96000/50⌉ + 1 = 1921 samples); grows
-    // lazily if an even higher sample rate is ever encountered.
-    let _yinWorkBuffer = new Float32Array(2048);
-
-    function midiToName(midi) {
-        const r = Math.round(midi);
-        const pc = ((r % 12) + 12) % 12;
-        const oct = Math.floor(r / 12) - 1;
-        return _LK_PITCH_NAMES[pc] + oct;
-    }
-
-    function freqToMidi(freq) {
-        return 12 * Math.log2(freq / 440) + 69;
-    }
-
-    function yinDetect(buffer, sampleRate, minFreqHz) {
-        const threshold = 0.15;
-        // tauMax is the lag that corresponds to the lowest pitch we search
-        // for (minFreqHz). Capping halfLen here keeps the outer tau loop and
-        // the inner difference-function loop both bounded by tauMax+1 instead
-        // of buffer.length/2, reducing total work from O(N²) with N=2048 to
-        // O(tauMax²) ≈ 882² at 44100 Hz / 50 Hz min — a ~5.4× speedup.
-        const tauMax = Math.ceil(sampleRate / minFreqHz);
-        const halfLen = Math.min(Math.floor(buffer.length / 2), tauMax + 1);
-        if (halfLen < tauMax) return { freq: -1, confidence: 0 };
-        // Reuse preallocated working buffer; grow only when a higher sample
-        // rate demands more capacity (extremely rare in practice).
-        if (_yinWorkBuffer.length < halfLen) _yinWorkBuffer = new Float32Array(halfLen);
-        const yinBuffer = _yinWorkBuffer;
-        let runningSum = 0;
-        yinBuffer[0] = 1;
-        for (let tau = 1; tau < halfLen; tau++) {
-            let sum = 0;
-            for (let i = 0; i < halfLen; i++) {
-                const delta = buffer[i] - buffer[i + tau];
-                sum += delta * delta;
-            }
-            yinBuffer[tau] = sum;
-            runningSum += sum;
-            yinBuffer[tau] = runningSum === 0 ? 1 : yinBuffer[tau] * (tau / runningSum);
-        }
-        let tau = 2;
-        while (tau < halfLen) {
-            if (yinBuffer[tau] < threshold) {
-                while (tau + 1 < halfLen && yinBuffer[tau + 1] < yinBuffer[tau]) tau++;
-                break;
-            }
-            tau++;
-        }
-        if (tau === halfLen) return { freq: -1, confidence: 0 };
-        const s0 = tau > 0 ? yinBuffer[tau - 1] : yinBuffer[tau];
-        const s1 = yinBuffer[tau];
-        const s2 = tau + 1 < halfLen ? yinBuffer[tau + 1] : yinBuffer[tau];
-        const parabDenom = 2 * (s0 - 2 * s1 + s2);
-        const betterTau = parabDenom !== 0 ? tau + (s0 - s2) / parabDenom : tau;
-        return {
-            freq: sampleRate / betterTau,
-            confidence: Math.max(0, 1 - yinBuffer[tau]),
-        };
-    }
 
     // Mic state — implicit-flag style mirroring note_detect's pattern.
     let micState = 'off';            // 'off' | 'requesting' | 'listening' | 'error'
