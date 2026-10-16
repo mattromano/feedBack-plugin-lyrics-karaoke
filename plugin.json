@@ -12,6 +12,10 @@
   "scriptType": "module",
   "minHost": "0.3.0-alpha.1",
   "routes": "routes.py",
+  "settings": {
+    "html": "settings.html",
+    "category": "audio"
+  },
   "category": "practice",
   "description": "Karaoke-style synced lyrics during playback.",
   "icon": "assets/thumb.svg"

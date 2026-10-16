@@ -20,7 +20,11 @@
  * lyrics_sync directory remains as a redirect stub for users with
  * bookmarks pointing at it.
  */
-import { freqToMidi, midiToName, yinDetect } from './pitch.js';
+import { DIFFICULTIES, freqToMidi, midiToName, yinDetect } from './pitch.js';
+import {
+    getDifficulty, setDifficulty, getDeviceId, setDeviceId, getLatencyMs, setLatencyMs,
+    listInputDevices,
+} from './prefs.js';
 
 (function () {
     'use strict';
@@ -1619,11 +1623,96 @@ import { freqToMidi, midiToName, yinDetect } from './pitch.js';
     window.lkFileUpload = lkFileUpload;
 
     // ══════════════════════════════════════════════════════════════════
+    // SETTINGS PAGE — difficulty, mic device, latency (settings.html)
+    // ══════════════════════════════════════════════════════════════════
+
+    async function fillDeviceSelect(sel, msgEl) {
+        let devices = [];
+        try { devices = await listInputDevices(); } catch (_) { /* noop */ }
+        const saved = getDeviceId();
+        sel.innerHTML = '';
+        const def = document.createElement('option');
+        def.value = '';
+        def.textContent = 'System default';
+        sel.appendChild(def);
+        for (const d of devices) {
+            if (!d.deviceId || d.deviceId === 'default') continue;
+            const opt = document.createElement('option');
+            opt.value = d.deviceId;
+            opt.textContent = d.label;
+            sel.appendChild(opt);
+        }
+        if (saved && !devices.some((d) => d.deviceId === saved)) {
+            // Keep the saved choice visible even while the device is unplugged.
+            const opt = document.createElement('option');
+            opt.value = saved;
+            opt.textContent = 'Saved microphone (not connected)';
+            sel.appendChild(opt);
+        }
+        sel.value = saved;
+        if (msgEl) {
+            const unnamed = devices.length > 0 && devices.every((d) => /^Microphone \d+$/.test(d.label));
+            msgEl.textContent = unnamed ? 'Click "Show device names" to see microphone names.' : '';
+        }
+    }
+
+    function hydrateSettings() {
+        const diffSel = document.getElementById('lk-set-difficulty');
+        if (!diffSel || diffSel.dataset.lkHydrated) return;
+        diffSel.dataset.lkHydrated = '1';
+
+        for (const d of Object.values(DIFFICULTIES)) {
+            const opt = document.createElement('option');
+            opt.value = d.id;
+            opt.textContent = d.label;
+            diffSel.appendChild(opt);
+        }
+        diffSel.value = getDifficulty();
+        diffSel.addEventListener('change', () => { setDifficulty(diffSel.value); onDifficultyChanged(); });
+
+        const devSel = document.getElementById('lk-set-device');
+        const devMsg = document.getElementById('lk-set-device-msg');
+        const namesBtn = document.getElementById('lk-set-device-names');
+        if (devSel) {
+            fillDeviceSelect(devSel, devMsg);
+            devSel.addEventListener('change', () => setDeviceId(devSel.value));
+        }
+        if (namesBtn && devSel) {
+            namesBtn.addEventListener('click', async () => {
+                // Device labels are hidden until the page has mic permission.
+                try {
+                    const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    s.getTracks().forEach((t) => t.stop());
+                } catch (e) {
+                    if (devMsg) devMsg.textContent = 'Microphone permission was denied.';
+                    return;
+                }
+                fillDeviceSelect(devSel, devMsg);
+            });
+        }
+
+        const lat = document.getElementById('lk-set-latency');
+        const latVal = document.getElementById('lk-set-latency-val');
+        if (lat) {
+            lat.value = String(getLatencyMs());
+            if (latVal) latVal.textContent = `${getLatencyMs()} ms`;
+            lat.addEventListener('input', () => {
+                setLatencyMs(lat.value);
+                if (latVal) latVal.textContent = `${getLatencyMs()} ms`;
+            });
+        }
+    }
+
+    // Placeholder until the player scorer lands; rebuilt by Task 6.
+    function onDifficultyChanged() {}
+
+    // ══════════════════════════════════════════════════════════════════
     // INIT
     // ══════════════════════════════════════════════════════════════════
 
     function init() {
         ensureToggleButton();
+        hydrateSettings();
         if (window.slopsmith && typeof window.slopsmith.on === 'function') {
             // window.slopsmith is an EventTarget; .on() forwards to
             // addEventListener, so the handler receives a CustomEvent
@@ -1657,6 +1746,7 @@ import { freqToMidi, midiToName, yinDetect } from './pitch.js';
                 if (name === 'plugin-lyrics_karaoke') {
                     onSetupScreenShown();
                 }
+                if (name === 'settings') hydrateSettings();
                 return ret;
             };
         }
