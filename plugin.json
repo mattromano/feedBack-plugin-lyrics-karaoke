@@ -1,7 +1,7 @@
 {
   "id": "lyrics_karaoke",
   "name": "Lyrics Karaoke",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "private": false,
   "nav": {
     "label": "Lyrics Karaoke",
@@ -9,7 +9,13 @@
   },
   "screen": "screen.html",
   "script": "screen.js",
+  "scriptType": "module",
+  "minHost": "0.3.0-alpha.1",
   "routes": "routes.py",
+  "settings": {
+    "html": "settings.html",
+    "category": "audio"
+  },
   "category": "practice",
   "description": "Karaoke-style synced lyrics during playback.",
   "icon": "assets/thumb.svg"

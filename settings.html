@@ -1,0 +1,37 @@
+<div>
+    <label class="text-sm font-medium text-gray-400 mb-2 block">Lyrics Karaoke</label>
+    <p class="text-xs text-gray-500 mb-3">
+        Scoring for the karaoke pitch view. Turn on the 🎤 button in the player
+        to sing along. Each phrase gets a rating, and your score, multiplier and
+        stars build up across the song. Singing in any octave counts.
+    </p>
+
+    <div class="flex items-center gap-3 mt-2 mb-4">
+        <label for="lk-set-difficulty" class="text-sm text-gray-300 w-28">Difficulty</label>
+        <select id="lk-set-difficulty"
+                class="bg-dark-700 text-gray-200 text-sm rounded px-2 py-1"></select>
+    </div>
+
+    <div class="flex items-center gap-3 mb-1">
+        <label for="lk-set-device" class="text-sm text-gray-300 w-28">Microphone</label>
+        <select id="lk-set-device"
+                class="bg-dark-700 text-gray-200 text-sm rounded px-2 py-1 max-w-xs">
+            <option value="">System default</option>
+        </select>
+        <button type="button" id="lk-set-device-names"
+                class="px-2 py-1 bg-dark-600 hover:bg-dark-500 rounded text-xs text-gray-300">
+            Show device names
+        </button>
+    </div>
+    <p id="lk-set-device-msg" class="text-xs text-gray-500 mb-4"></p>
+
+    <div class="flex items-center gap-3 mb-1">
+        <label for="lk-set-latency" class="text-sm text-gray-300 w-28">Mic latency</label>
+        <input type="range" id="lk-set-latency" min="-100" max="400" step="10"
+               class="accent-accent w-48">
+        <span id="lk-set-latency-val" class="text-xs text-gray-300 w-16">0 ms</span>
+    </div>
+    <p class="text-xs text-gray-500">
+        Raise this if your notes score late; USB headsets usually need 0–50 ms.
+    </p>
+</div>
