@@ -634,7 +634,7 @@ import { createScorer } from './scoring.js';
                 userDisplayMidi = null;
             }
             updateMicPill();
-            drawHud(W, dpr, playheadX);
+            drawHud(dpr, playheadX);
         }
 
         // Playhead.
@@ -646,22 +646,34 @@ import { createScorer } from './scoring.js';
         ctx.stroke();
     }
 
-    // Score, multiplier and stars at the top right; the latest phrase
+    // Score, multiplier and stars on one line at the top left (other
+    // plugins' panels sit over the top-right corner); the latest phrase
     // rating floats above the playhead and fades out.
-    function drawHud(W, dpr, playheadX) {
+    function drawHud(dpr, playheadX) {
         const snap = scorer.snapshot();
         ctx.save();
         ctx.textBaseline = 'top';
-        ctx.textAlign = 'right';
-        const right = W - 16 * dpr;
-        ctx.font = `bold ${Math.round(18 * dpr)}px sans-serif`;
-        ctx.fillStyle = TEXT_COLOR;
-        ctx.fillText(snap.score.toLocaleString(), right, 10 * dpr);
-        ctx.font = `${Math.round(13 * dpr)}px sans-serif`;
-        ctx.fillStyle = snap.multiplier > 1 ? BAR_COLOR_ACTIVE : TEXT_COLOR_PAST;
-        ctx.fillText(`×${snap.multiplier}`, right, 32 * dpr);
-        ctx.fillStyle = BAR_COLOR_FILL;
-        ctx.fillText('★'.repeat(snap.stars) + '☆'.repeat(5 - snap.stars), right, 50 * dpr);
+        ctx.textAlign = 'left';
+        const parts = [
+            [snap.score.toLocaleString(), `bold ${Math.round(15 * dpr)}px sans-serif`, TEXT_COLOR],
+            [`×${snap.multiplier}`, `bold ${Math.round(13 * dpr)}px sans-serif`,
+                snap.multiplier > 1 ? BAR_COLOR_ACTIVE : TEXT_COLOR_PAST],
+            ['★'.repeat(snap.stars) + '☆'.repeat(5 - snap.stars), `${Math.round(13 * dpr)}px sans-serif`, BAR_COLOR_FILL],
+        ];
+        const gap = 10 * dpr;
+        const widths = parts.map(([text, font]) => { ctx.font = font; return ctx.measureText(text).width; });
+        const total = widths.reduce((a, b) => a + b, 0) + gap * (parts.length - 1);
+        const y = 8 * dpr;
+        // Backing pill keeps the HUD legible over high-pitched bars.
+        ctx.fillStyle = 'rgba(8, 8, 14, 0.85)';
+        roundFillRect(ctx, 8 * dpr, 4 * dpr, total + 12 * dpr, 22 * dpr, 8 * dpr);
+        let x = 14 * dpr;
+        parts.forEach(([text, font, color], i) => {
+            ctx.font = font;
+            ctx.fillStyle = color;
+            ctx.fillText(text, x, y);
+            x += widths[i] + gap;
+        });
 
         if (lastRating) {
             const age = _wallNow() - lastRating.at;
@@ -670,7 +682,7 @@ import { createScorer } from './scoring.js';
                 ctx.textAlign = 'center';
                 ctx.font = `bold ${Math.round(16 * dpr)}px sans-serif`;
                 ctx.fillStyle = _LK_RATING_COLORS[lastRating.text] || TEXT_COLOR;
-                ctx.fillText(lastRating.text, playheadX, 8 * dpr);
+                ctx.fillText(lastRating.text, playheadX, 26 * dpr);
             }
         }
         ctx.restore();

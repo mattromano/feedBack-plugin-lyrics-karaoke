@@ -151,3 +151,14 @@ test('seeking back silently then singing does not cascade Awful ratings', () => 
     const ev = sc.advanceTo(endOf(s, 2));
     assert.deepEqual(ev.map((e) => e.phraseIndex), [2]);
 });
+
+test('a phrase joined partway through is left unrated', () => {
+    const s = song([[60, 62, 64], [65]]);
+    const sc = createScorer({ ...s, difficulty: 'medium' });
+    // Join 1.5 s into phrase 0 (mic started late or seek landed mid-phrase).
+    for (let t = 1.5; t < 3; t += 0.05) sc.addSample({ t, midi: t < 2 ? 62 : 64 });
+    sing(sc, s, 1, 0);
+    const ev = sc.advanceTo(endOf(s, 1));
+    assert.deepEqual(ev.map((e) => e.phraseIndex), [1]);
+    assert.equal(sc.snapshot().streak, 1);
+});

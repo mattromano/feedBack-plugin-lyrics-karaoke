@@ -14,5 +14,5 @@
 ### Changed
 - The plugin now uses the ES-module layout (`scriptType: "module"`, code under `src/`)
   and needs feedBack 0.3.0-alpha.1 or later.
-- Phrases you joined after they ended (mic started mid-song or after a seek) are left
-  unrated instead of counting as misses.
+- Phrases already under way when you join (mic started mid-song, or a seek that lands
+  mid-phrase) are left unrated instead of counting as misses.

@@ -44,7 +44,7 @@ export function createScorer({ tokens, phrases, difficulty }) {
     let credited;       // Map tokenIdx → credited song-seconds
     let prevT;
     let lastAdvanceT;   // latest time passed to advanceTo, for seek detection
-    let startedAt;      // when this pass began; phrases already over by then aren't rated
+    let startedAt;      // when this pass began; phrases already under way by then aren't rated
     let nextPhrase;     // phrases are time-ordered; everything before this is finalized
     let score, streak, multiplier, accSum, ratedCount;
 
@@ -105,9 +105,10 @@ export function createScorer({ tokens, phrases, difficulty }) {
         const events = [];
         while (nextPhrase < phr.length && phr[nextPhrase].end + PHRASE_GRACE_S <= t) {
             const phraseIndex = nextPhrase++;
-            // Joined after this phrase was over (mic started mid-song or
-            // after a seek): leave it unrated rather than calling it Awful.
-            if (phr[phraseIndex].end + PHRASE_GRACE_S <= startedAt) continue;
+            // Joined after this phrase had started (mic turned on mid-song,
+            // or a seek landed mid-phrase): leave it unrated rather than
+            // calling the half you heard Awful and breaking the streak.
+            if (phr[phraseIndex].start + PHRASE_GRACE_S < startedAt) continue;
             const pitched = phr[phraseIndex].pitchedIdxs || [];
             let wSum = 0, aSum = 0;
             for (const idx of pitched) {
