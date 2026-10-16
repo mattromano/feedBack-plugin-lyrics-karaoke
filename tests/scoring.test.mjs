@@ -128,3 +128,26 @@ test('stars follow mean accuracy of rated phrases', () => {
     // mean accuracy 0.5 → 2 stars
     assert.equal(sc.snapshot().stars, 2);
 });
+
+test('starting mid-song does not rate phrases already passed', () => {
+    const s = song([[60], [62], [64]]);
+    const sc = createScorer({ ...s, difficulty: 'medium' });
+    assert.deepEqual(sc.advanceTo(s.phrases[2].start), []);
+    sing(sc, s, 2, 0);
+    const ev = sc.advanceTo(endOf(s, 2));
+    assert.deepEqual(ev.map((e) => e.phraseIndex), [2]);
+    assert.equal(sc.snapshot().score, 1000);
+});
+
+test('seeking back silently then singing does not cascade Awful ratings', () => {
+    const s = song([[60], [62], [64], [65]]);
+    const sc = createScorer({ ...s, difficulty: 'medium' });
+    for (let i = 0; i < 4; i++) sing(sc, s, i, 0);
+    sc.advanceTo(endOf(s, 3));
+    // Seek back to phrase 2 without singing: frames keep advancing.
+    sc.advanceTo(s.phrases[2].start);
+    assert.equal(sc.snapshot().score, 0);
+    sing(sc, s, 2, 0);
+    const ev = sc.advanceTo(endOf(s, 2));
+    assert.deepEqual(ev.map((e) => e.phraseIndex), [2]);
+});

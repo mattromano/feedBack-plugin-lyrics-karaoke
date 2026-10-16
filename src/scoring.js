@@ -43,12 +43,16 @@ export function createScorer({ tokens, phrases, difficulty }) {
 
     let credited;       // Map tokenIdx → credited song-seconds
     let prevT;
+    let lastAdvanceT;   // latest time passed to advanceTo, for seek detection
+    let startedAt;      // when this pass began; phrases already over by then aren't rated
     let nextPhrase;     // phrases are time-ordered; everything before this is finalized
     let score, streak, multiplier, accSum, ratedCount;
 
     function reset() {
         credited = new Map();
         prevT = null;
+        lastAdvanceT = null;
+        startedAt = null;
         nextPhrase = 0;
         score = 0;
         streak = 0;
@@ -72,6 +76,7 @@ export function createScorer({ tokens, phrases, difficulty }) {
 
     function addSample({ t, midi }) {
         if (prevT !== null && t < prevT - PAUSE_EPSILON_S) reset();
+        if (startedAt === null) startedAt = t;
         const dt = prevT === null ? FIRST_SAMPLE_DT_S : t - prevT;
         prevT = prevT === null ? t : Math.max(prevT, t);
         if (dt <= PAUSE_EPSILON_S) return;
@@ -93,9 +98,16 @@ export function createScorer({ tokens, phrases, difficulty }) {
     }
 
     function advanceTo(t) {
+        // A backward jump (seek, replay, practice loop) starts a new pass.
+        if (lastAdvanceT !== null && t < lastAdvanceT - PAUSE_EPSILON_S) reset();
+        lastAdvanceT = lastAdvanceT === null ? t : Math.max(lastAdvanceT, t);
+        if (startedAt === null) startedAt = t;
         const events = [];
         while (nextPhrase < phr.length && phr[nextPhrase].end + PHRASE_GRACE_S <= t) {
             const phraseIndex = nextPhrase++;
+            // Joined after this phrase was over (mic started mid-song or
+            // after a seek): leave it unrated rather than calling it Awful.
+            if (phr[phraseIndex].end + PHRASE_GRACE_S <= startedAt) continue;
             const pitched = phr[phraseIndex].pitchedIdxs || [];
             let wSum = 0, aSum = 0;
             for (const idx of pitched) {

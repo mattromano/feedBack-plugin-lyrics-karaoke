@@ -23,8 +23,10 @@
 import { DIFFICULTIES, freqToMidi, midiToName, yinDetect } from './pitch.js';
 import {
     getDifficulty, setDifficulty, getDeviceId, setDeviceId, getLatencyMs, setLatencyMs,
-    listInputDevices,
+    listInputDevices, micConstraints, isDeviceMissingError, micSongTime,
 } from './prefs.js';
+import { buildPhrases } from './phrases.js';
+import { createScorer } from './scoring.js';
 
 (function () {
     'use strict';
@@ -37,6 +39,8 @@ import {
     let pitchData = null;            // {tokens: [{t, d, w, midi?}, ...]}
     let tokenIndexMap = new Map();   // tok → index into pitchData.tokens; rebuilt on each load
     let songPitchRange = null;       // {lo, hi} fixed across the song so bars don't shift vertically as the window scrolls
+    let scorer = null;               // createScorer() for the current song + difficulty
+    let lastRating = null;           // {text, at} — most recent phrase rating, for the HUD pop-up
     let karaokeMode = false;         // user toggle
     let savedShowLyrics = true;      // restore on toggle off
     let generating = false;          // suppress double-clicks during /generate
@@ -131,7 +135,16 @@ import {
         if (pitchData && Array.isArray(pitchData.tokens)) {
             pitchData.tokens.forEach((tok, i) => { if (tok) tokenIndexMap.set(tok, i); });
         }
+        rebuildScorer();
         return pitchData;
+    }
+
+    function rebuildScorer() {
+        const tokens = (pitchData && Array.isArray(pitchData.tokens)) ? pitchData.tokens : null;
+        scorer = tokens
+            ? createScorer({ tokens, phrases: buildPhrases(tokens), difficulty: getDifficulty() })
+            : null;
+        lastRating = null;
     }
 
     // Compute a fixed pitch range for the whole song so a syllable's
@@ -567,15 +580,22 @@ import {
             }
         }
 
+        // Score phrases the playhead has passed — only while listening,
+        // so turning the mic off doesn't rate the rest of the song Awful.
+        if (scorer && micState === 'listening') {
+            const events = scorer.advanceTo(now - (micLatencyMs / 1000) * getPlaybackRate());
+            if (events.length) lastRating = { text: events[events.length - 1].rating, at: _wallNow() };
+        }
+        const hasScored = !!scorer && scorer.snapshot().ratedCount > 0;
+
         // Mic-feedback overlays — only when the user has been singing.
-        if (userResults.size > 0 || micState === 'listening') {
+        if (scorer && (hasScored || micState === 'listening')) {
             for (const { tok, midi } of visible) {
                 if (midi == null) continue;
                 const idx = tokenIndexMap.get(tok);
                 if (idx === undefined) continue;
-                const entry = userResults.get(idx);
-                if (!entry || entry.samplesIn === 0) continue;
-                const acc = entry.accuracy;
+                const acc = scorer.tokenAccuracy(idx);
+                if (acc === null) continue;
                 const x0 = xFor(tok.t);
                 const x1 = xFor(tok.t + (tok.d || 0));
                 const w = Math.max(2 * dpr, x1 - x0 - 2 * BAR_PAD_PX * dpr);
@@ -614,6 +634,7 @@ import {
                 userDisplayMidi = null;
             }
             updateMicPill();
+            drawHud(W, dpr, playheadX);
         }
 
         // Playhead.
@@ -623,6 +644,36 @@ import {
         ctx.moveTo(playheadX, 6 * dpr);
         ctx.lineTo(playheadX, H - 6 * dpr);
         ctx.stroke();
+    }
+
+    // Score, multiplier and stars at the top right; the latest phrase
+    // rating floats above the playhead and fades out.
+    function drawHud(W, dpr, playheadX) {
+        const snap = scorer.snapshot();
+        ctx.save();
+        ctx.textBaseline = 'top';
+        ctx.textAlign = 'right';
+        const right = W - 16 * dpr;
+        ctx.font = `bold ${Math.round(18 * dpr)}px sans-serif`;
+        ctx.fillStyle = TEXT_COLOR;
+        ctx.fillText(snap.score.toLocaleString(), right, 10 * dpr);
+        ctx.font = `${Math.round(13 * dpr)}px sans-serif`;
+        ctx.fillStyle = snap.multiplier > 1 ? BAR_COLOR_ACTIVE : TEXT_COLOR_PAST;
+        ctx.fillText(`×${snap.multiplier}`, right, 32 * dpr);
+        ctx.fillStyle = BAR_COLOR_FILL;
+        ctx.fillText('★'.repeat(snap.stars) + '☆'.repeat(5 - snap.stars), right, 50 * dpr);
+
+        if (lastRating) {
+            const age = _wallNow() - lastRating.at;
+            if (age < _LK_RATING_SHOW_MS) {
+                ctx.globalAlpha = 1 - age / _LK_RATING_SHOW_MS;
+                ctx.textAlign = 'center';
+                ctx.font = `bold ${Math.round(16 * dpr)}px sans-serif`;
+                ctx.fillStyle = _LK_RATING_COLORS[lastRating.text] || TEXT_COLOR;
+                ctx.fillText(lastRating.text, playheadX, 8 * dpr);
+            }
+        }
+        ctx.restore();
     }
 
     function roundFillRect(c, x, y, w, h, r) {
@@ -652,11 +703,16 @@ import {
     const _LK_YIN_MIN_HZ = 50;        // human vocal floor — drops sub-bass artefacts
     const _LK_YIN_MAX_HZ = 1100;      // upper end of soprano range
     const _LK_YIN_CONFIDENCE = 0.5;   // YIN clarity score; below = unvoiced
-    const _LK_MATCH_TOLERANCE = 1.0;  // semitones; locked for v1
     const _LK_SAMPLE_FRESH_MS = 200;  // stale samples don't draw the user line
     const _LK_SAMPLE_RING_CAP = 256;  // ~12 s at 50 ms cadence
     const _LK_STORAGE_KEY = 'lyrics_karaoke.micFeedback';
     const _LK_PITCH_LINE_COLOR = '#22d3ee';
+    const _LK_RATING_SHOW_MS = 1200;
+    const _LK_RATING_COLORS = {
+        Awesome: '#ffe080', Strong: '#ffe080',
+        Good: '#9be7a0', OK: '#9be7a0',
+        Messy: '#f87171', Awful: '#f87171',
+    };
 
     // Mic state — implicit-flag style mirroring note_detect's pattern.
     let micState = 'off';            // 'off' | 'requesting' | 'listening' | 'error'
@@ -677,6 +733,9 @@ import {
     let micLastCapturedAt = -Infinity;   // previous frame's song-time, for stall/seek detection
     let micErrorMsg = '';
     let micPillLastText = '';            // last text written to micPill; avoids per-frame DOM writes
+    let micNotice = '';                  // non-fatal note shown in the mic title (e.g. device fallback)
+    let micLatencyMs = 0;                // latency correction read once per mic start
+    let diffSelect = null;               // in-player difficulty <select>
     // Session-scoped intent: "the user enabled mic for THIS song." Used
     // to auto-restore the mic when karaoke is toggled off and back on
     // for the same song without spilling that intent across songs (a
@@ -686,7 +745,6 @@ import {
 
     // Per-song bookkeeping for the live overlay.
     const userPitchSamples = [];      // ring of {t, midi, confidence}
-    const userResults = new Map();    // tokenIndex → {samplesIn, samplesMatched, accuracy}
     let userDisplayMidi = null;       // smoothed value used for the pitch line + pill
     let userLastSampleWallAt = -Infinity; // wall-clock ms of latest sample (used for staleness)
 
@@ -717,7 +775,8 @@ import {
 
     function resetUserResults() {
         userPitchSamples.length = 0;
-        userResults.clear();
+        if (scorer) scorer.reset();
+        lastRating = null;
         userDisplayMidi = null;
         userLastSampleWallAt = -Infinity;
         // Also drop the transport-tracking cursor so the next frame
@@ -725,42 +784,14 @@ import {
         micLastCapturedAt = -Infinity;
     }
 
-    function findActiveTokenIndex(time) {
-        // Latest-starting token whose [t, t+d) contains `time` wins, so an
-        // overlapping next-syllable claim takes priority over the trailing
-        // tail of the previous one. Linear scan is fine — token counts
-        // are typically a few hundred per song.
-        if (!pitchData || !Array.isArray(pitchData.tokens)) return -1;
-        let bestIdx = -1;
-        let bestStart = -Infinity;
-        for (let i = 0; i < pitchData.tokens.length; i++) {
-            const tok = pitchData.tokens[i];
-            if (!tok || typeof tok.t !== 'number' || typeof tok.midi !== 'number') continue;
-            const t0 = tok.t;
-            const t1 = t0 + (tok.d || 0);
-            if (time < t0 || time >= t1) continue;
-            if (t0 > bestStart) { bestStart = t0; bestIdx = i; }
-        }
-        return bestIdx;
-    }
-
     function processYinFrame(buffer, sampleRate, capturedAt, sessionAtCapture) {
         if (sessionAtCapture !== micSessionGen) return;  // stop happened mid-frame
 
-        // Transport awareness. If the playhead jumped backward (replay,
-        // seek-back), wipe the bookkeeping so old scores don't resurrect
-        // on the new pass. If the playhead didn't advance at all
-        // (paused), drop the sample — otherwise samplesIn for whatever
-        // token sits under the cursor would inflate forever, dragging
-        // accuracy toward 0/1 with no real input.
-        if (micLastCapturedAt > -Infinity) {
-            const delta = capturedAt - micLastCapturedAt;
-            if (delta < 0) {
-                resetUserResults();
-            } else if (delta < 1e-3) {
-                return;
-            }
-        }
+        // Transport awareness. If the playhead didn't advance (paused),
+        // drop the sample so the live pitch line ages out. A backward
+        // jump (replay, seek-back, practice loop) is handled by the
+        // scorer, which resets itself so old phrases don't resurrect.
+        if (micLastCapturedAt > -Infinity && Math.abs(capturedAt - micLastCapturedAt) < 1e-3) return;
         micLastCapturedAt = capturedAt;
 
         const r = yinDetect(buffer, sampleRate, _LK_YIN_MIN_HZ);
@@ -773,17 +804,7 @@ import {
         if (userPitchSamples.length > _LK_SAMPLE_RING_CAP) userPitchSamples.shift();
         userLastSampleWallAt = _wallNow();
 
-        const idx = findActiveTokenIndex(capturedAt);
-        if (idx < 0) return;
-        const tok = pitchData.tokens[idx];
-        let entry = userResults.get(idx);
-        if (!entry) {
-            entry = { samplesIn: 0, samplesMatched: 0, accuracy: 0 };
-            userResults.set(idx, entry);
-        }
-        entry.samplesIn += 1;
-        if (Math.abs(midi - tok.midi) <= _LK_MATCH_TOLERANCE) entry.samplesMatched += 1;
-        entry.accuracy = entry.samplesMatched / entry.samplesIn;
+        if (scorer) scorer.addSample({ t: capturedAt, midi });
     }
 
     async function startMic() {
@@ -809,7 +830,7 @@ import {
             // valid when Safari/iOS evaluates resume(). After the
             // await, activation can be consumed and resume() would
             // refuse, leaving us silently in 'listening' with no audio.
-            pendingCtx = new (window.AudioContext || window.webkitAudioContext)();
+            pendingCtx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
             if (pendingCtx.state === 'suspended') {
                 try { await pendingCtx.resume(); } catch (e) {
                     throw new Error('Audio context could not resume. Click 🎤 again.');
@@ -818,14 +839,17 @@ import {
                     throw new Error('Audio context is suspended. Click 🎤 again.');
                 }
             }
-            pendingStream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    echoCancellation: false,
-                    noiseSuppression: false,
-                    autoGainControl: false,
-                    channelCount: 1,
-                },
-            });
+            micNotice = '';
+            const wantDeviceId = getDeviceId();
+            try {
+                pendingStream = await navigator.mediaDevices.getUserMedia(micConstraints(wantDeviceId));
+            } catch (e) {
+                // A saved mic that's been unplugged shouldn't block singing:
+                // fall back to the system default once and say so.
+                if (!wantDeviceId || !isDeviceMissingError(e)) throw e;
+                pendingStream = await navigator.mediaDevices.getUserMedia(micConstraints(''));
+                micNotice = 'Saved mic not found — using system default.';
+            }
             if (session !== micSessionGen) {
                 // Stop happened while the permission prompt was open.
                 pendingStream.getTracks().forEach((t) => { try { t.stop(); } catch (_) { /* noop */ } });
@@ -853,7 +877,7 @@ import {
             // ringSize frames of mic input — i.e. it spans
             // [now - bufferDurationWall, now] in wall-clock seconds.
             // Tag the *midpoint* of that window as the buffer's
-            // representative song time so findActiveTokenIndex scores
+            // representative song time so the scorer credits
             // against the syllable actually being sung, not the one
             // under the cursor when the 50 ms timer wakes. Convert
             // wall-clock to song-time via the current playback rate so
@@ -861,6 +885,7 @@ import {
             // syllable (read fresh per frame — the user can scrub the
             // speed slider mid-song).
             const midpointWallSec = (ringSize / 2) / sampleRate;
+            micLatencyMs = getLatencyMs();
 
             micProcessor.onaudioprocess = (e) => {
                 if (micState !== 'listening') return;
@@ -878,7 +903,7 @@ import {
                 // 50 ms timer cadence.
                 if (micRingCount >= ringSize) {
                     micPendingBuffer.set(micRingBuffer);
-                    micPendingBufferAt = getNow() - midpointWallSec * getPlaybackRate();
+                    micPendingBufferAt = micSongTime(getNow(), midpointWallSec, micLatencyMs, getPlaybackRate());
                     micPendingSession = session;
                     micPendingReady = true;
                 }
@@ -988,8 +1013,27 @@ import {
         micPill.textContent = '';
         toggleBtn.parentNode.insertBefore(micPill, micBtn.nextSibling);
 
+        diffSelect = document.createElement('select');
+        diffSelect.id = 'btn-karaoke-difficulty';
+        diffSelect.className = 'ml-1 bg-dark-600 text-gray-300 text-xs rounded-lg px-2 py-1.5';
+        diffSelect.title = 'Vocal difficulty';
+        diffSelect.setAttribute('aria-label', 'Vocal difficulty');
+        for (const d of Object.values(DIFFICULTIES)) {
+            const opt = document.createElement('option');
+            opt.value = d.id;
+            opt.textContent = d.label;
+            diffSelect.appendChild(opt);
+        }
+        diffSelect.value = getDifficulty();
+        diffSelect.addEventListener('change', () => {
+            setDifficulty(diffSelect.value);
+            onDifficultyChanged();
+        });
+        toggleBtn.parentNode.insertBefore(diffSelect, micPill.nextSibling);
+
         micBtn.style.display = 'none';
         micPill.style.display = 'none';
+        diffSelect.style.display = 'none';
     }
 
     async function onMicClick() {
@@ -1011,6 +1055,7 @@ import {
         if (!micBtn) return;
         const sloppak = isSloppakSong(currentSong);
         const eligible = sloppak && karaokeMode && !!status && status.has_pitch && songHasMidi();
+        if (diffSelect) diffSelect.style.display = eligible ? '' : 'none';
         if (!eligible) {
             micBtn.style.display = 'none';
             if (micPill) micPill.style.display = 'none';
@@ -1031,7 +1076,7 @@ import {
             case 'listening':
                 micBtn.disabled = false;
                 micBtn.className = BTN_CLASS_ACTIVE;
-                micBtn.title = 'Stop live mic feedback';
+                micBtn.title = 'Stop live mic feedback' + (micNotice ? ` (${micNotice})` : '');
                 micBtn.setAttribute('aria-label', 'Stop live mic feedback');
                 micBtn.setAttribute('aria-pressed', 'true');
                 micPillLastText = '';
@@ -1703,8 +1748,15 @@ import {
         }
     }
 
-    // Placeholder until the player scorer lands; rebuilt by Task 6.
-    function onDifficultyChanged() {}
+    // Difficulty changes mid-song start scoring over at the new level.
+    function onDifficultyChanged() {
+        const d = getDifficulty();
+        if (diffSelect && diffSelect.value !== d) diffSelect.value = d;
+        const setSel = document.getElementById('lk-set-difficulty');
+        if (setSel && setSel.value !== d) setSel.value = d;
+        rebuildScorer();
+        resetUserResults();
+    }
 
     // ══════════════════════════════════════════════════════════════════
     // INIT

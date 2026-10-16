@@ -74,3 +74,12 @@ export async function listInputDevices() {
         .filter((d) => d.kind === 'audioinput')
         .map((d, i) => ({ deviceId: d.deviceId, label: d.label || `Microphone ${i + 1}` }));
 }
+
+/**
+ * Song time a mic buffer represents: the playhead now, minus the buffer's
+ * midpoint age and the user's latency correction (both wall-clock), scaled
+ * to song-seconds by the playback rate.
+ */
+export function micSongTime(nowSongSec, midpointWallSec, latencyMs, playbackRate) {
+    return nowSongSec - (midpointWallSec + latencyMs / 1000) * playbackRate;
+}

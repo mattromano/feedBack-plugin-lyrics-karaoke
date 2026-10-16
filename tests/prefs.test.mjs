@@ -2,7 +2,7 @@ import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     getDifficulty, setDifficulty, getDeviceId, setDeviceId, getLatencyMs, setLatencyMs,
-    micConstraints, isDeviceMissingError, listInputDevices,
+    micConstraints, isDeviceMissingError, listInputDevices, micSongTime,
 } from '../src/prefs.js';
 
 function mapStorage() {
@@ -102,4 +102,12 @@ test('listInputDevices keeps audio inputs and names unlabeled ones', async () =>
 test('listInputDevices returns [] without mediaDevices', async () => {
     setNavigator({});
     assert.deepEqual(await listInputDevices(), []);
+});
+
+test('micSongTime subtracts buffer midpoint and latency, scaled by playback rate', () => {
+    const close = (a, b) => assert.ok(Math.abs(a - b) < 1e-9, `${a} !≈ ${b}`);
+    close(micSongTime(10, 0.05, 0, 1), 9.95);
+    close(micSongTime(10, 0.05, 100, 1), 9.85);
+    close(micSongTime(10, 0.05, 100, 0.5), 9.925);
+    close(micSongTime(10, 0.05, -50, 1), 10.0);
 });
