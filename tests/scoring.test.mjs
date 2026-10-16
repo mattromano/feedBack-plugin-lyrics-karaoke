@@ -31,6 +31,14 @@ function sing(scorer, s, pi, offsetSemis) {
 
 const endOf = (s, pi) => s.phrases[pi].end + 0.3;
 
+// Drive advanceTo like the render loop does (~60 fps) and collect events.
+function frames(scorer, from, to) {
+    const out = [];
+    for (let t = from; t < to; t += 1 / 60) out.push(...scorer.advanceTo(t));
+    out.push(...scorer.advanceTo(to));
+    return out;
+}
+
 test('octave-down singing is Awesome', () => {
     const s = song([[64, 67]]);
     const sc = createScorer({ ...s, difficulty: 'expert' });
@@ -47,7 +55,7 @@ test('silence is Awful and resets streak', () => {
     const sc = createScorer({ ...s, difficulty: 'medium' });
     sing(sc, s, 0, 0);
     sing(sc, s, 1, 0);
-    const ev = sc.advanceTo(endOf(s, 2));
+    const ev = frames(sc, s.phrases[1].end, endOf(s, 2));
     assert.deepEqual(ev.map((e) => e.points), [1000, 2000, 0]);
     assert.equal(ev[2].rating, 'Awful');
     assert.equal(sc.snapshot().streak, 0);
@@ -85,7 +93,8 @@ test('paused samples add nothing', () => {
 });
 
 test('reset on backward time', () => {
-    const s = song([[60], [62]]);
+    // Phrase 0 is 2 s long so the rewind below is a real (> 1 s) jump.
+    const s = song([[60, 61], [62]]);
     const sc = createScorer({ ...s, difficulty: 'medium' });
     sing(sc, s, 0, 0);
     assert.equal(sc.advanceTo(endOf(s, 0)).length, 1);
@@ -94,7 +103,7 @@ test('reset on backward time', () => {
     assert.equal(sc.snapshot().score, 0);
     assert.equal(sc.snapshot().ratedCount, 0);
     // The rewound phrase can be scored again.
-    assert.equal(sc.advanceTo(endOf(s, 0)).length, 1);
+    assert.equal(frames(sc, 0.1, endOf(s, 0)).length, 1);
 });
 
 test('unpitched phrase skipped', () => {
@@ -124,7 +133,7 @@ test('stars follow mean accuracy of rated phrases', () => {
     const sc = createScorer({ ...s, difficulty: 'medium' });
     assert.equal(sc.snapshot().stars, 0);
     sing(sc, s, 0, 0);
-    sc.advanceTo(endOf(s, 1));
+    frames(sc, s.phrases[0].end, endOf(s, 1));
     // mean accuracy 0.5 → 2 stars
     assert.equal(sc.snapshot().stars, 2);
 });
@@ -161,4 +170,51 @@ test('a phrase joined partway through is left unrated', () => {
     const ev = sc.advanceTo(endOf(s, 1));
     assert.deepEqual(ev.map((e) => e.phraseIndex), [1]);
     assert.equal(sc.snapshot().streak, 1);
+});
+
+test('small backward clock steps do not reset the score', () => {
+    const s = song([[60], [62]]);
+    const sc = createScorer({ ...s, difficulty: 'medium' });
+    sing(sc, s, 0, 0);
+    sc.advanceTo(endOf(s, 0));
+    // JUCE transport re-anchoring / pause hand-off can step back a few ms.
+    sc.advanceTo(endOf(s, 0) - 0.005);
+    sc.addSample({ t: s.phrases[0].end - 0.005, midi: 60 });
+    // Speeding up with latency set steps the corrected clock back ~200 ms.
+    sc.advanceTo(endOf(s, 0) - 0.2);
+    assert.equal(sc.snapshot().ratedCount, 1);
+    sing(sc, s, 1, 0);
+    const ev = sc.advanceTo(endOf(s, 1));
+    assert.deepEqual(ev.map((e) => e.phraseIndex), [1]);
+    assert.equal(sc.snapshot().streak, 2);
+});
+
+test('a forward jump leaves skipped phrases unrated', () => {
+    const s = song([[60], [62], [64], [65]]);
+    const sc = createScorer({ ...s, difficulty: 'medium' });
+    sing(sc, s, 0, 0);
+    sc.advanceTo(endOf(s, 0));
+    // Jump from ~1.3 s to phrase 3 (start 9 s) without a seek event.
+    sc.advanceTo(s.phrases[3].start);
+    sing(sc, s, 3, 0);
+    const ev = sc.advanceTo(endOf(s, 3));
+    assert.deepEqual(ev.map((e) => e.phraseIndex), [3]);
+    assert.equal(sc.snapshot().ratedCount, 2);
+    assert.equal(sc.snapshot().streak, 2);
+});
+
+test('seek() backward starts a new pass; seek() forward skips', () => {
+    const s = song([[60], [62], [64]]);
+    const sc = createScorer({ ...s, difficulty: 'medium' });
+    sing(sc, s, 0, 0);
+    sing(sc, s, 1, 0);
+    sc.advanceTo(endOf(s, 1));
+    assert.equal(sc.snapshot().ratedCount, 2);
+    sc.seek(s.phrases[1].start - 0.5);   // small backward seek, below the jump threshold
+    assert.equal(sc.snapshot().ratedCount, 0);
+    sing(sc, s, 1, 0);
+    assert.deepEqual(sc.advanceTo(endOf(s, 1)).map((e) => e.phraseIndex), [1]);
+    sc.seek(s.phrases[2].start + 0.5);   // forward into the middle of phrase 2
+    assert.deepEqual(sc.advanceTo(endOf(s, 2)), []);
+    assert.equal(sc.snapshot().ratedCount, 1);
 });

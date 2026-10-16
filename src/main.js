@@ -23,7 +23,7 @@
 import { DIFFICULTIES, freqToMidi, midiToName, yinDetect } from './pitch.js';
 import {
     getDifficulty, setDifficulty, getDeviceId, setDeviceId, getLatencyMs, setLatencyMs,
-    listInputDevices, micConstraints, isDeviceMissingError, micSongTime,
+    listInputDevices, micConstraints, isDeviceMissingError, micSongTime, savedDeviceLabel,
 } from './prefs.js';
 import { buildPhrases } from './phrases.js';
 import { createScorer } from './scoring.js';
@@ -1040,6 +1040,9 @@ import { createScorer } from './scoring.js';
         diffSelect.addEventListener('change', () => {
             setDifficulty(diffSelect.value);
             onDifficultyChanged();
+            // Hand focus back so space/arrow shortcuts drive the player
+            // again instead of silently changing difficulty.
+            diffSelect.blur();
         });
         toggleBtn.parentNode.insertBefore(diffSelect, micPill.nextSibling);
 
@@ -1699,11 +1702,12 @@ import { createScorer } from './scoring.js';
             opt.textContent = d.label;
             sel.appendChild(opt);
         }
-        if (saved && !devices.some((d) => d.deviceId === saved)) {
-            // Keep the saved choice visible even while the device is unplugged.
+        const savedLabel = savedDeviceLabel(devices, saved);
+        if (savedLabel) {
+            // Keep the saved choice selectable even when it isn't listed.
             const opt = document.createElement('option');
             opt.value = saved;
-            opt.textContent = 'Saved microphone (not connected)';
+            opt.textContent = savedLabel;
             sel.appendChild(opt);
         }
         sel.value = saved;
@@ -1782,6 +1786,15 @@ import { createScorer } from './scoring.js';
             // addEventListener, so the handler receives a CustomEvent
             // whose `.detail` is the actual payload (the song info).
             window.slopsmith.on('song:loaded', (e) => onSongLoaded(e && e.detail));
+            // Core's single repositioning funnel ({from, to, reason}). Seeks
+            // backward start a new scoring pass; forward seeks skip phrases.
+            window.slopsmith.on('song:seek', (e) => {
+                const to = Number(e && e.detail && e.detail.to);
+                if (!scorer || !Number.isFinite(to)) return;
+                scorer.seek(to - (micLatencyMs / 1000) * getPlaybackRate());
+                lastRating = null;
+                micLastCapturedAt = -Infinity;
+            });
             // Catch-up: plugin scripts load after app.js, so the very
             // first `song:loaded` may have already fired by the time
             // this listener attaches. Read the cached currentSong as a

@@ -19,6 +19,10 @@ const PHRASE_GRACE_S = 0.25;
 const MAX_SAMPLE_DT_S = 0.1;    // caps credit across dropouts
 const FIRST_SAMPLE_DT_S = 0.05; // nominal detector cadence
 const PAUSE_EPSILON_S = 1e-3;
+// Clock moves bigger than this are seeks; smaller backward steps are
+// transport jitter (JUCE re-anchoring, pause hand-off, speed changes with
+// latency set) and count as "no progress".
+const JUMP_S = 1.0;
 const MAX_MULTIPLIER = 4;
 const POINTS_PER_PHRASE = 1000;
 
@@ -75,11 +79,11 @@ export function createScorer({ tokens, phrases, difficulty }) {
     }
 
     function addSample({ t, midi }) {
-        if (prevT !== null && t < prevT - PAUSE_EPSILON_S) reset();
+        if (prevT !== null && t < prevT - JUMP_S) reset();
         if (startedAt === null) startedAt = t;
         const dt = prevT === null ? FIRST_SAMPLE_DT_S : t - prevT;
-        prevT = prevT === null ? t : Math.max(prevT, t);
-        if (dt <= PAUSE_EPSILON_S) return;
+        if (dt <= PAUSE_EPSILON_S) return;  // paused, or a small backward step
+        prevT = t;
         const idx = activeToken(t);
         if (idx < 0) return;
         const credit = sampleCredit(pitchClassCents(midi, toks[idx].midi), diff.toleranceCents);
@@ -97,10 +101,26 @@ export function createScorer({ tokens, phrases, difficulty }) {
         return accuracyOf(idx);
     }
 
+    // Explicit reposition (the host's song:seek). Backward starts a new
+    // pass; forward keeps the score but leaves skipped phrases unrated.
+    function seek(to) {
+        const last = Math.max(lastAdvanceT ?? -Infinity, prevT ?? -Infinity);
+        if (to < last) reset();
+        startedAt = to;
+        lastAdvanceT = to;
+        prevT = null;
+    }
+
     function advanceTo(t) {
-        // A backward jump (seek, replay, practice loop) starts a new pass.
-        if (lastAdvanceT !== null && t < lastAdvanceT - PAUSE_EPSILON_S) reset();
-        lastAdvanceT = lastAdvanceT === null ? t : Math.max(lastAdvanceT, t);
+        // Latest time seen from frames or mic samples — samples keep the
+        // clock fresh while singing even if frames arrive sparsely.
+        const last = Math.max(lastAdvanceT ?? -Infinity, prevT ?? -Infinity);
+        if (last > -Infinity) {
+            if (t < last - JUMP_S) seek(t);        // missed seek event: rewind
+            else if (t > last + JUMP_S) seek(t);   // missed seek event / stalled frames: skip ahead
+            else if (t < last) t = last;           // jitter: no progress
+        }
+        lastAdvanceT = t;
         if (startedAt === null) startedAt = t;
         const events = [];
         while (nextPhrase < phr.length && phr[nextPhrase].end + PHRASE_GRACE_S <= t) {
@@ -141,5 +161,5 @@ export function createScorer({ tokens, phrases, difficulty }) {
         };
     }
 
-    return { addSample, advanceTo, reset, tokenAccuracy, snapshot };
+    return { addSample, advanceTo, seek, reset, tokenAccuracy, snapshot };
 }

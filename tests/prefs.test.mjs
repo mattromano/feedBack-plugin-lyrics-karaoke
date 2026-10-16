@@ -2,7 +2,7 @@ import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     getDifficulty, setDifficulty, getDeviceId, setDeviceId, getLatencyMs, setLatencyMs,
-    micConstraints, isDeviceMissingError, listInputDevices, micSongTime,
+    micConstraints, isDeviceMissingError, listInputDevices, micSongTime, savedDeviceLabel,
 } from '../src/prefs.js';
 
 function mapStorage() {
@@ -110,4 +110,13 @@ test('micSongTime subtracts buffer midpoint and latency, scaled by playback rate
     close(micSongTime(10, 0.05, 100, 1), 9.85);
     close(micSongTime(10, 0.05, 100, 0.5), 9.925);
     close(micSongTime(10, 0.05, -50, 1), 10.0);
+});
+
+test('savedDeviceLabel only calls a saved mic "not connected" when ids are visible', () => {
+    const named = [{ deviceId: 'jabra', label: 'Jabra EVOLVE 20' }];
+    assert.equal(savedDeviceLabel(named, 'jabra'), null);            // listed: no extra entry
+    assert.equal(savedDeviceLabel(named, 'gone'), 'Saved microphone (not connected)');
+    // Before mic permission Chromium returns empty ids — can't tell, don't claim it's unplugged.
+    assert.equal(savedDeviceLabel([{ deviceId: '', label: 'Microphone 1' }], 'jabra'), 'Saved microphone');
+    assert.equal(savedDeviceLabel(named, ''), null);
 });

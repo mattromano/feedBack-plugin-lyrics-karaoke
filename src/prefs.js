@@ -83,3 +83,14 @@ export async function listInputDevices() {
 export function micSongTime(nowSongSec, midpointWallSec, latencyMs, playbackRate) {
     return nowSongSec - (midpointWallSec + latencyMs / 1000) * playbackRate;
 }
+
+/**
+ * Label for an extra "saved device" option when the saved mic isn't in the
+ * list, or null when no extra option is needed. Before mic permission the
+ * browser hides device ids, so absence then doesn't mean it's unplugged.
+ */
+export function savedDeviceLabel(devices, savedId) {
+    if (!savedId || devices.some((d) => d.deviceId === savedId)) return null;
+    const idsVisible = devices.some((d) => d.deviceId);
+    return idsVisible ? 'Saved microphone (not connected)' : 'Saved microphone';
+}
