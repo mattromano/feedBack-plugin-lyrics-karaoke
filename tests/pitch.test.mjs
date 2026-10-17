@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
     DIFFICULTIES, DEFAULT_DIFFICULTY, pitchClassCents, sampleCredit,
     freqToMidi, midiToName, yinDetect, foldToTarget, monitorGainFor, isHowling,
+    VOCAL_MIN_HZ, foldSticky,
 } from '../src/pitch.js';
 
 const close = (a, b, eps = 1e-9) => assert.ok(Math.abs(a - b) <= eps, `${a} !≈ ${b}`);
@@ -49,6 +50,60 @@ test('foldToTarget draws your pitch in the octave nearest the target note', () =
     close(foldToTarget(65.4, 60), 65.4);    // within ±6 semitones: unchanged
     close(foldToTarget(53.5, 60), 65.5);    // −6.5 st folds up to +5.5 (nearest octave)
     assert.equal(foldToTarget(55, null), 55); // no target: raw pitch
+});
+
+// A real Holiday run read ~62 Hz (song bass through the speakers, YIN dip 0.01) about 10% of
+// the time; with YIN's 50 Hz floor that yanked the arrow 13+ semitones down mid-phrase.
+test('the vocal floor ignores periodic sound below the singing range', () => {
+    const sr = 48000, buf = new Float32Array(4096);
+    for (let i = 0; i < buf.length; i++) {
+        const t = i / sr;
+        buf[i] = Math.sin(2 * Math.PI * 62 * t) + 0.5 * Math.sin(2 * Math.PI * 124 * t)
+            + 0.15 * Math.sin(2 * Math.PI * 147 * t);
+    }
+    assert.ok(yinDetect(buf, sr, 50).freq < 70, 'a 50 Hz floor locks on to the bass');
+    const r = yinDetect(buf, sr, VOCAL_MIN_HZ);
+    assert.ok(r.freq < 0 || r.freq >= VOCAL_MIN_HZ, `got ${r.freq} Hz`);
+});
+
+test('the vocal floor still hears a low male voice', () => {
+    const sr = 48000, buf = new Float32Array(4096);
+    for (let i = 0; i < buf.length; i++) buf[i] = Math.sin(2 * Math.PI * 82.41 * i / sr);   // E2
+    assert.ok(Math.abs(freqToMidi(yinDetect(buf, sr, VOCAL_MIN_HZ).freq) - 40) < 0.1);
+});
+
+// The same Holiday run: 20 of 27 big arrow jumps came while the voice held steady, because the
+// arrow was refolded into the octave nearest each new target note.
+test('foldSticky keeps a steady voice in one octave while the target moves', () => {
+    let shift = null;
+    const shown = [];
+    for (const target of [60, 63, 66, 55, 58]) {
+        const r = foldSticky(50, target, shift);
+        shift = r.shift;
+        shown.push(r.shown);
+    }
+    assert.deepEqual(shown, [62, 62, 62, 62, 62]);
+    // plain nearest-octave folding drops a whole octave to 50 for target 55
+    close(foldToTarget(50, 55), 50);
+});
+
+test('foldSticky does not flap at the half-octave boundary', () => {
+    let shift = null;
+    const shown = [];
+    for (const midi of [53.9, 54.1, 53.95, 54.2]) {
+        const r = foldSticky(midi, 60, shift);
+        shift = r.shift;
+        shown.push(Math.round(r.shown));
+    }
+    assert.deepEqual(shown, [66, 66, 66, 66]);   // foldToTarget alternates 66 / 54
+});
+
+test('foldSticky refolds once the voice is far from the target, and without a target', () => {
+    const a = foldSticky(50, 60, null);              // 62
+    const b = foldSticky(50, 74, a.shift);           // 62 is 12 below: refold
+    close(b.shown, 74);
+    assert.deepEqual(foldSticky(55, null, 12), { shown: 67, shift: 12 });   // no target: keep the octave
+    assert.deepEqual(foldSticky(55, null, null), { shown: 55, shift: 0 });
 });
 
 test('monitorGainFor boosts a headset mic but caps at +18 dB: 0 = off, 50% = +12 dB, 100% = +18 dB', () => {
