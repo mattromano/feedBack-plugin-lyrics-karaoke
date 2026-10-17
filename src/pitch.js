@@ -103,9 +103,32 @@ export function foldToTarget(midi, targetMidi) {
 /**
  * Linear gain for the vocal monitor from the 0–1 slider. A headset mic with
  * auto-gain off sits ~20 dB under a mastered song, so the range is boost:
- * 0 = off, then −6 dB … +30 dB (50% = +12 dB). A limiter follows it.
+ * 0 = off, then +6 dB … +18 dB (50% = +12 dB). +30 dB fed back through laptop
+ * speakers in testing. A limiter follows it.
  */
 export function monitorGainFor(volume) {
     if (!(volume > 0)) return 0;
-    return Math.pow(10, (36 * Math.min(1, volume) - 6) / 20);
+    return Math.pow(10, (12 * Math.min(1, volume) + 6) / 20);
+}
+
+/**
+ * True when the detected pitch has sat on one note, within 10 cents, for the
+ * ~1 s before `now` without a gap — the signature of speaker→mic feedback.
+ * Sung notes drift (vibrato, scoops) far more than that. `samples` are
+ * time-ordered {t, midi}.
+ */
+export function isHowling(samples, now) {
+    const WINDOW_S = 1.0, MIN_SPAN_S = 0.9, MAX_GAP_S = 0.15, MAX_SPREAD = 0.1;
+    let lo = Infinity, hi = -Infinity, first = null, prev = null, count = 0;
+    for (const s of samples || []) {
+        if (s.t < now - WINDOW_S || s.t > now) continue;
+        if (prev !== null && s.t - prev > MAX_GAP_S) return false;
+        if (first === null) first = s.t;
+        prev = s.t;
+        count += 1;
+        if (s.midi < lo) lo = s.midi;
+        if (s.midi > hi) hi = s.midi;
+    }
+    if (count < 15 || first === null || prev - first < MIN_SPAN_S) return false;
+    return hi - lo <= MAX_SPREAD;
 }

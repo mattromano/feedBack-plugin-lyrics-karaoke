@@ -20,7 +20,7 @@
  * lyrics_sync directory remains as a redirect stub for users with
  * bookmarks pointing at it.
  */
-import { DIFFICULTIES, freqToMidi, midiToName, yinDetect, pitchClassCents, foldToTarget, monitorGainFor } from './pitch.js';
+import { DIFFICULTIES, freqToMidi, midiToName, yinDetect, pitchClassCents, foldToTarget, monitorGainFor, isHowling } from './pitch.js';
 import {
     getDifficulty, setDifficulty, getDeviceId, setDeviceId, getLatencyMs, setLatencyMs,
     listInputDevices, micConstraints, isDeviceMissingError, micSongTime, savedDeviceLabel, micWarnings,
@@ -757,8 +757,10 @@ import { createScorer } from './scoring.js';
         });
         // Mic setup problems (built-in mic, speakers) make scoring meaningless —
         // say so where the singer is looking.
-        if (micState === 'listening' && micSetupWarnings.length) {
-            const warn = '⚠ ' + micSetupWarnings[0];
+        const howlNotice = _wallNow() < howlNoticeUntil
+            ? 'Feedback detected — voice volume lowered' : null;
+        if (micState === 'listening' && (howlNotice || micSetupWarnings.length)) {
+            const warn = '⚠ ' + (howlNotice || micSetupWarnings[0]);
             ctx.font = `bold ${Math.round(12 * dpr)}px sans-serif`;
             const ww = ctx.measureText(warn).width;
             ctx.fillStyle = 'rgba(8, 8, 14, 0.85)';
@@ -774,7 +776,7 @@ import { createScorer } from './scoring.js';
                 ctx.textAlign = 'center';
                 ctx.font = `bold ${Math.round(16 * dpr)}px sans-serif`;
                 ctx.fillStyle = _LK_RATING_COLORS[lastRating.text] || TEXT_COLOR;
-                const ratingY = (micState === 'listening' && micSetupWarnings.length) ? 50 : 26;
+                const ratingY = (micState === 'listening' && (micSetupWarnings.length || _wallNow() < howlNoticeUntil)) ? 50 : 26;
                 ctx.fillText(lastRating.text, playheadX, ratingY * dpr);
             }
         }
@@ -844,7 +846,10 @@ import { createScorer } from './scoring.js';
     let micSelect = null;                // in-player microphone <select>
     let monitorSlider = null;            // in-player voice-volume slider
     let monitorGain = null;              // GainNode: your voice → the game's output
-    const diag = { frames: 0, rmsDb: -Infinity, peakDb: -Infinity, voiced: 0, unvoiced: 0, lastMidi: null, lastConfidence: 0 };
+    let howlCooldownUntil = -Infinity;   // song time before which the howl guard won't act again
+    let howlNoticeUntil = -Infinity;     // wall-clock ms until which the 'feedback' notice shows
+    const howlSamples = [];              // every confident pitch (any range), for the howl guard
+    const diag = { howlDucks: 0, lastHz: null, frames: 0, rmsDb: -Infinity, peakDb: -Infinity, voiced: 0, unvoiced: 0, lastMidi: null, lastConfidence: 0 };
     // Session-scoped intent: "the user enabled mic for THIS song." Used
     // to auto-restore the mic when karaoke is toggled off and back on
     // for the same song without spilling that intent across songs (a
@@ -907,6 +912,12 @@ import { createScorer } from './scoring.js';
         diag.lastConfidence = r ? r.confidence : 0;
         if (!r || r.freq <= 0 || r.confidence < _LK_YIN_CONFIDENCE) { diag.unvoiced += 1; return; }
         diag.voiced += 1;
+        diag.lastHz = r.freq;
+        // Feedback usually rings at 1–3 kHz, above the singing range filtered
+        // below, so the howl guard watches every confident pitch.
+        howlSamples.push({ t: capturedAt, midi: freqToMidi(r.freq) });
+        if (howlSamples.length > 64) howlSamples.shift();
+        guardAgainstHowl(capturedAt);
         if (r.freq < _LK_YIN_MIN_HZ || r.freq > _LK_YIN_MAX_HZ) return;
         const midi = freqToMidi(r.freq);
         if (!isFinite(midi)) return;
@@ -917,6 +928,23 @@ import { createScorer } from './scoring.js';
 
         diag.lastMidi = midi;
         if (scorer) scorer.addSample({ t: capturedAt, midi });
+    }
+
+    // Feedback guard: a speaker→mic howl is one pitch held dead steady. When the
+    // monitor is on and that shows up, drop the voice volume 6 dB and say so.
+    function guardAgainstHowl(now) {
+        if (!monitorGain || now < howlCooldownUntil) return;
+        if (!isHowling(howlSamples, now)) return;
+        const lowered = Math.max(0, getMonitorVolume() - 0.5);   // 0.5 of the slider = 6 dB
+        setMonitorVolume(lowered);
+        if (micCtx) monitorGain.gain.setTargetAtTime(monitorGainFor(lowered), micCtx.currentTime, 0.01);
+        if (monitorSlider) {
+            monitorSlider.value = String(Math.round(lowered * 100));
+            monitorSlider.title = `Your voice volume: ${monitorSlider.value}%`;
+        }
+        howlCooldownUntil = now + 1.5;
+        howlNoticeUntil = _wallNow() + 4000;
+        diag.howlDucks += 1;
     }
 
     async function startMic() {

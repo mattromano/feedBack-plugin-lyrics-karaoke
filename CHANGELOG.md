@@ -6,7 +6,11 @@
 - Hear yourself: while the karaoke mic is on, your voice plays through the same device
   as the game's audio (not forced into a headset), with a 🔊 volume slider next to the
   mic picker and a limiter so loud notes don't clip. The slider boosts (50% = +12 dB,
-  100% = +30 dB) because a headset mic with auto-gain off sits ~20 dB under the song.
+  100% = +18 dB) because a headset mic with auto-gain off sits ~20 dB under the song.
+- Feedback guard: a speaker→mic howl (one pitch held within 10 cents for ~1 s, at any
+  frequency — they usually ring at 1–3 kHz) drops your voice volume 6 dB and shows
+  "Feedback detected — voice volume lowered". Echo cancellation stays off: with your
+  voice coming out of the speakers it scrubs your own voice and breaks pitch detection.
 - Pitch feedback you can see: an arrow at the playhead and a trail over what you just
   sang, green inside the difficulty's tolerance and orange outside, drawn in the octave
   nearest the note so singing an octave low lines up with the bars. The note you're on

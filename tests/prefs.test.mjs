@@ -73,6 +73,9 @@ test('a throwing localStorage returns defaults without throwing', () => {
 test('micConstraints only pins a device when one is chosen', () => {
     const def = micConstraints('');
     assert.equal('deviceId' in def.audio, false);
+    // No echo cancellation: with the voice monitored through speakers it treats
+    // the singer's own voice as echo and scrubs it (measured: ~4% of frames still
+    // pitched). Feedback is handled by the monitor cap + howl guard instead.
     assert.equal(def.audio.echoCancellation, false);
     assert.equal(def.audio.noiseSuppression, false);
     assert.equal(def.audio.autoGainControl, false);

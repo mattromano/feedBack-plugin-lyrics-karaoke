@@ -50,6 +50,9 @@ export function setLatencyMs(ms) {
 export function micConstraints(deviceId) {
     return {
         audio: {
+            // No echo cancellation: with the voice monitored through speakers it
+            // treats the singer's own voice as echo and scrubs it, killing pitch
+            // detection. Feedback is handled by the monitor cap + howl guard.
             echoCancellation: false,
             noiseSuppression: false,
             autoGainControl: false,
