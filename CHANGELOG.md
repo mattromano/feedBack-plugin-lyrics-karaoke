@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+- Hear yourself: while the karaoke mic is on, your voice plays through the same device
+  as the game's audio (not forced into a headset), with a 🔊 volume slider next to the
+  mic picker and a limiter so loud notes don't clip.
+
 ### Changed
 - Karaoke never opens a microphone you didn't pick. With no mic chosen, 🎤 says "Pick a
   microphone first" instead of using the system default. If your chosen mic is unplugged
@@ -11,7 +16,7 @@
 
 ### Added
 - The 🎤 tooltip names the mic in use, and a red line on the karaoke strip warns when it
-  is a built-in laptop mic or the song is playing through speakers.
+  is a built-in laptop mic (or a built-in mic over speakers).
 - `tools/batch_generate_pitch.py` generates karaoke pitch for a whole library.
 
 ## [1.5.0] - 2026-10-16

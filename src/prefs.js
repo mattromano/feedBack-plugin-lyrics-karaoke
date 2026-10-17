@@ -110,7 +110,9 @@ export function micWarnings(micLabel, devices) {
     const outputs = (devices || []).filter((d) => d.kind === 'audiooutput');
     const def = outputs.find((d) => d.deviceId === 'default') || outputs[0];
     const outName = def && def.label ? def.label.replace(/^Default - /, '') : '';
-    if (/speaker/i.test(outName)) {
+    // Speakers only spoil scoring with a far-field (built-in) mic; a close-talk
+    // headset mic over speakers is the intended setup.
+    if (micLabel && BUILT_IN_MIC.test(micLabel) && /speaker/i.test(outName)) {
         out.push(`The song is playing through ${outName} — the mic will hear it. Use headphones.`);
     }
     return out;
@@ -155,4 +157,34 @@ export function micStartError(deviceId, devices) {
         return "Your chosen microphone isn't connected — plug it in or pick another.";
     }
     return null;
+}
+
+/** Volume (0–1) of your voice played back through the game's output. */
+export function getMonitorVolume() {
+    const raw = read('monitorVolume');
+    if (raw === null) return 0.5;
+    const n = Number(raw);
+    return Number.isFinite(n) ? clampVolume(n) : 0.5;
+}
+export function setMonitorVolume(v) {
+    write('monitorVolume', clampVolume(Number(v)));
+}
+function clampVolume(n) {
+    if (!Number.isFinite(n)) return 0.5;
+    return Math.round(Math.max(0, Math.min(1, n)) * 20) / 20;
+}
+
+/**
+ * Output device for the voice monitor: the same device playing the game's
+ * audio. Browser playback uses the OS default (''); when the native engine
+ * plays the song, match its output device by name.
+ */
+export function monitorSinkId(devices, { juceMode, engineOutput }) {
+    if (!juceMode || !engineOutput) return '';
+    // Chromium appends " (vendor:product)" or " (Built-in)" to labels; the
+    // native engine reports the bare device name.
+    const bare = (label) => String(label || '').replace(/\s+\([^()]*\)$/, '');
+    const match = (devices || []).find((d) => d.kind === 'audiooutput'
+        && d.deviceId !== 'default' && (d.label === engineOutput || bare(d.label) === engineOutput));
+    return match ? match.deviceId : '';
 }

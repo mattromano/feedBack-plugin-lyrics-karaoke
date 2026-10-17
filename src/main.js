@@ -24,7 +24,7 @@ import { DIFFICULTIES, freqToMidi, midiToName, yinDetect } from './pitch.js';
 import {
     getDifficulty, setDifficulty, getDeviceId, setDeviceId, getLatencyMs, setLatencyMs,
     listInputDevices, micConstraints, isDeviceMissingError, micSongTime, savedDeviceLabel, micWarnings,
-    buildMicOptions, micStartError, SHOW_MIC_NAMES,
+    buildMicOptions, micStartError, SHOW_MIC_NAMES, getMonitorVolume, setMonitorVolume, monitorSinkId,
 } from './prefs.js';
 import { buildPhrases } from './phrases.js';
 import { createScorer } from './scoring.js';
@@ -778,6 +778,8 @@ import { createScorer } from './scoring.js';
     let micLatencyMs = 0;                // latency correction read once per mic start
     let diffSelect = null;               // in-player difficulty <select>
     let micSelect = null;                // in-player microphone <select>
+    let monitorSlider = null;            // in-player voice-volume slider
+    let monitorGain = null;              // GainNode: your voice → the game's output
     // Session-scoped intent: "the user enabled mic for THIS song." Used
     // to auto-restore the mic when karaoke is toggled off and back on
     // for the same song without spilling that intent across songs (a
@@ -977,6 +979,22 @@ import { createScorer } from './scoring.js';
             micProcessor.connect(muteSink);
             muteSink.connect(micCtx.destination);
 
+            // Vocal monitor: your voice through the same device that plays the
+            // game's audio, at the user's volume. A hard limiter keeps a loud
+            // note (or the start of a feedback howl) from clipping harshly.
+            monitorGain = micCtx.createGain();
+            monitorGain.gain.value = getMonitorVolume();
+            const limiter = micCtx.createDynamicsCompressor();
+            limiter.threshold.value = -6;
+            limiter.knee.value = 0;
+            limiter.ratio.value = 20;
+            limiter.attack.value = 0.002;
+            limiter.release.value = 0.1;
+            micSourceNode.connect(monitorGain);
+            monitorGain.connect(limiter);
+            limiter.connect(micCtx.destination);
+            routeMonitorToGameOutput(micCtx, session);
+
             micTimer = setInterval(() => {
                 if (!micPendingReady) return;
                 const at = micPendingBufferAt;
@@ -1016,12 +1034,27 @@ import { createScorer } from './scoring.js';
         }
     }
 
+    // Point the mic context at the device playing the game: the OS default
+    // for browser playback, or the native engine's output when it plays the song.
+    async function routeMonitorToGameOutput(ctxForMic, session) {
+        if (!ctxForMic || typeof ctxForMic.setSinkId !== 'function') return;
+        let engineOutput = '';
+        const bridge = window.feedBackDesktop && window.feedBackDesktop.audio;
+        if (window._juceMode && bridge && typeof bridge.getCurrentDevice === 'function') {
+            try { engineOutput = ((await bridge.getCurrentDevice()) || {}).output || ''; } catch (_) { /* noop */ }
+        }
+        const sink = monitorSinkId(await listMediaDevicesSafe(), { juceMode: !!window._juceMode, engineOutput });
+        if (session !== micSessionGen || !sink) return;
+        try { await ctxForMic.setSinkId(sink); } catch (e) { console.warn('lyrics_karaoke: monitor output switch failed', e); }
+    }
+
     async function listMediaDevicesSafe() {
         try { return await navigator.mediaDevices.enumerateDevices(); } catch (_) { return []; }
     }
 
     function stopMic(opts) {
         const keepFlag = !!(opts && opts.keepFlag);
+        monitorGain = null;   // closed with micCtx below
         micDeviceLabel = '';
         micSetupWarnings = [];
         micSessionGen += 1;  // any in-flight YIN frame becomes stale
@@ -1108,6 +1141,24 @@ import { createScorer } from './scoring.js';
             micSelect.blur();
         });
         toggleBtn.parentNode.insertBefore(micSelect, diffSelect.nextSibling);
+
+        monitorSlider = document.createElement('input');
+        monitorSlider.type = 'range';
+        monitorSlider.id = 'btn-karaoke-monitor-volume';
+        monitorSlider.min = '0';
+        monitorSlider.max = '100';
+        monitorSlider.step = '5';
+        monitorSlider.value = String(Math.round(getMonitorVolume() * 100));
+        monitorSlider.className = 'ml-1 w-20 accent-accent align-middle';
+        monitorSlider.title = `Your voice volume: ${monitorSlider.value}%`;
+        monitorSlider.setAttribute('aria-label', 'Your voice volume');
+        monitorSlider.addEventListener('input', () => {
+            setMonitorVolume(Number(monitorSlider.value) / 100);
+            monitorSlider.title = `Your voice volume: ${monitorSlider.value}%`;
+            if (monitorGain && micCtx) monitorGain.gain.setTargetAtTime(getMonitorVolume(), micCtx.currentTime, 0.02);
+        });
+        monitorSlider.addEventListener('change', () => monitorSlider.blur());
+        toggleBtn.parentNode.insertBefore(monitorSlider, micSelect.nextSibling);
         refreshMicPickers();
         if (navigator.mediaDevices && typeof navigator.mediaDevices.addEventListener === 'function') {
             navigator.mediaDevices.addEventListener('devicechange', () => refreshMicPickers());
@@ -1117,6 +1168,7 @@ import { createScorer } from './scoring.js';
         micPill.style.display = 'none';
         diffSelect.style.display = 'none';
         micSelect.style.display = 'none';
+        monitorSlider.style.display = 'none';
     }
 
     async function onMicClick() {
@@ -1140,6 +1192,7 @@ import { createScorer } from './scoring.js';
         const eligible = sloppak && karaokeMode && !!status && status.has_pitch && songHasMidi();
         if (diffSelect) diffSelect.style.display = eligible ? '' : 'none';
         if (micSelect) micSelect.style.display = eligible ? '' : 'none';
+        if (monitorSlider) monitorSlider.style.display = eligible ? '' : 'none';
         if (!eligible) {
             micBtn.style.display = 'none';
             if (micPill) micPill.style.display = 'none';

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
     getDifficulty, setDifficulty, getDeviceId, setDeviceId, getLatencyMs, setLatencyMs,
     micConstraints, isDeviceMissingError, listInputDevices, micSongTime, savedDeviceLabel, micWarnings, buildMicOptions, micStartError, SHOW_MIC_NAMES,
+    getMonitorVolume, setMonitorVolume, monitorSinkId,
 } from '../src/prefs.js';
 
 function mapStorage() {
@@ -129,6 +130,9 @@ test('micWarnings flags the built-in mic and speaker output', () => {
         'The song is playing through MacBook Pro Speakers — the mic will hear it. Use headphones.',
     ]);
     assert.deepEqual(micWarnings('Jabra EVOLVE 20', headset), []);
+    // A close-talk headset mic singing over speakers is the intended setup
+    // (your voice plays through the speakers too) — no speaker warning then.
+    assert.deepEqual(micWarnings('Jabra EVOLVE 20', speakers), []);
     assert.deepEqual(micWarnings('Default - MacBook Pro Microphone (Built-in)', headset),
         ['Using the built-in mic — pick your headset in Settings → Lyrics Karaoke.']);
     // Unknown output (no labels before permission) → no speaker warning.
@@ -164,4 +168,44 @@ test('micStartError refuses to open any mic until one is chosen, and never subst
     assert.equal(micStartError('gone', named), "Your chosen microphone isn't connected — plug it in or pick another.");
     // Before mic permission ids are hidden: can't tell, so let getUserMedia decide.
     assert.equal(micStartError('jabra', [{ deviceId: '', label: 'Microphone 1' }]), null);
+});
+
+test('monitor volume persists, clamps to 0–1 in 5% steps, defaults to 50%', () => {
+    assert.equal(getMonitorVolume(), 0.5);
+    setMonitorVolume(0.83);
+    assert.equal(getMonitorVolume(), 0.85);
+    setMonitorVolume(7);
+    assert.equal(getMonitorVolume(), 1);
+    setMonitorVolume(-1);
+    assert.equal(getMonitorVolume(), 0);
+    globalThis.localStorage.setItem('lyrics_karaoke.monitorVolume', 'loud');
+    assert.equal(getMonitorVolume(), 0.5);
+});
+
+test('monitorSinkId follows the device playing the game audio', () => {
+    const outs = [
+        { kind: 'audiooutput', deviceId: 'default', label: 'Default - MacBook Pro Speakers' },
+        { kind: 'audiooutput', deviceId: 'spk', label: 'MacBook Pro Speakers' },
+        { kind: 'audiooutput', deviceId: 'jab', label: 'Jabra EVOLVE 20' },
+        { kind: 'audioinput', deviceId: 'jabin', label: 'Jabra EVOLVE 20' },
+    ];
+    // Browser playback (no native engine): songs use the OS default output.
+    assert.equal(monitorSinkId(outs, { juceMode: false, engineOutput: 'Jabra EVOLVE 20' }), '');
+    // Native engine playing: match its output device by name (outputs only).
+    assert.equal(monitorSinkId(outs, { juceMode: true, engineOutput: 'Jabra EVOLVE 20' }), 'jab');
+    assert.equal(monitorSinkId(outs, { juceMode: true, engineOutput: 'MacBook Pro Speakers' }), 'spk');
+    // Engine on the OS default, or a name we can't find: OS default.
+    assert.equal(monitorSinkId(outs, { juceMode: true, engineOutput: '' }), '');
+    assert.equal(monitorSinkId(outs, { juceMode: true, engineOutput: 'Gone Device' }), '');
+});
+
+test('monitorSinkId matches Chromium labels that carry a (vendor:product) or (Built-in) suffix', () => {
+    // Real labels from the macOS desktop app.
+    const outs = [
+        { kind: 'audiooutput', deviceId: 'default', label: 'Default - MacBook Pro Speakers (Built-in)' },
+        { kind: 'audiooutput', deviceId: '04b6c2d5', label: 'Jabra EVOLVE 20 (0b0e:0301)' },
+        { kind: 'audiooutput', deviceId: '023448c6', label: 'MacBook Pro Speakers (Built-in)' },
+    ];
+    assert.equal(monitorSinkId(outs, { juceMode: true, engineOutput: 'Jabra EVOLVE 20' }), '04b6c2d5');
+    assert.equal(monitorSinkId(outs, { juceMode: true, engineOutput: 'MacBook Pro Speakers' }), '023448c6');
 });
