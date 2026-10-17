@@ -23,7 +23,7 @@
 import { DIFFICULTIES, freqToMidi, midiToName, yinDetect } from './pitch.js';
 import {
     getDifficulty, setDifficulty, getDeviceId, setDeviceId, getLatencyMs, setLatencyMs,
-    listInputDevices, micConstraints, isDeviceMissingError, micSongTime, savedDeviceLabel,
+    listInputDevices, micConstraints, isDeviceMissingError, micSongTime, savedDeviceLabel, micWarnings,
 } from './prefs.js';
 import { buildPhrases } from './phrases.js';
 import { createScorer } from './scoring.js';
@@ -674,6 +674,17 @@ import { createScorer } from './scoring.js';
             ctx.fillText(text, x, y);
             x += widths[i] + gap;
         });
+        // Mic setup problems (built-in mic, speakers) make scoring meaningless —
+        // say so where the singer is looking.
+        if (micState === 'listening' && micSetupWarnings.length) {
+            const warn = '⚠ ' + micSetupWarnings[0];
+            ctx.font = `bold ${Math.round(12 * dpr)}px sans-serif`;
+            const ww = ctx.measureText(warn).width;
+            ctx.fillStyle = 'rgba(8, 8, 14, 0.85)';
+            roundFillRect(ctx, 8 * dpr, 28 * dpr, ww + 12 * dpr, 18 * dpr, 6 * dpr);
+            ctx.fillStyle = '#f87171';
+            ctx.fillText(warn, 14 * dpr, 31 * dpr);
+        }
 
         if (lastRating) {
             const age = _wallNow() - lastRating.at;
@@ -682,7 +693,8 @@ import { createScorer } from './scoring.js';
                 ctx.textAlign = 'center';
                 ctx.font = `bold ${Math.round(16 * dpr)}px sans-serif`;
                 ctx.fillStyle = _LK_RATING_COLORS[lastRating.text] || TEXT_COLOR;
-                ctx.fillText(lastRating.text, playheadX, 26 * dpr);
+                const ratingY = (micState === 'listening' && micSetupWarnings.length) ? 50 : 26;
+                ctx.fillText(lastRating.text, playheadX, ratingY * dpr);
             }
         }
         ctx.restore();
@@ -746,6 +758,8 @@ import { createScorer } from './scoring.js';
     let micErrorMsg = '';
     let micPillLastText = '';            // last text written to micPill; avoids per-frame DOM writes
     let micNotice = '';                  // non-fatal note shown in the mic title (e.g. device fallback)
+    let micDeviceLabel = '';             // label of the mic actually opened
+    let micSetupWarnings = [];           // micWarnings(): built-in mic, speaker output
     let micLatencyMs = 0;                // latency correction read once per mic start
     let diffSelect = null;               // in-player difficulty <select>
     // Session-scoped intent: "the user enabled mic for THIS song." Used
@@ -870,6 +884,14 @@ import { createScorer } from './scoring.js';
             }
             micStream = pendingStream;
             micCtx = pendingCtx;
+            const track = micStream.getAudioTracks()[0];
+            micDeviceLabel = (track && track.label) || '';
+            micSetupWarnings = [];
+            listMediaDevicesSafe().then((devices) => {
+                if (session !== micSessionGen) return;
+                micSetupWarnings = micWarnings(micDeviceLabel, devices);
+                refreshMicUi();
+            });
             micSourceNode = micCtx.createMediaStreamSource(micStream);
             micProcessor = micCtx.createScriptProcessor(_LK_YIN_FRAME_SIZE, 1, 1);
             // Preallocate fixed-size buffers to avoid per-frame Float32Array
@@ -970,8 +992,14 @@ import { createScorer } from './scoring.js';
         }
     }
 
+    async function listMediaDevicesSafe() {
+        try { return await navigator.mediaDevices.enumerateDevices(); } catch (_) { return []; }
+    }
+
     function stopMic(opts) {
         const keepFlag = !!(opts && opts.keepFlag);
+        micDeviceLabel = '';
+        micSetupWarnings = [];
         micSessionGen += 1;  // any in-flight YIN frame becomes stale
         if (micTimer) { clearInterval(micTimer); micTimer = null; }
         if (micProcessor) {
@@ -1091,7 +1119,11 @@ import { createScorer } from './scoring.js';
             case 'listening':
                 micBtn.disabled = false;
                 micBtn.className = BTN_CLASS_ACTIVE;
-                micBtn.title = 'Stop live mic feedback' + (micNotice ? ` (${micNotice})` : '');
+                micBtn.title = [
+                    `Listening on ${micDeviceLabel || 'the default mic'} — click to stop`,
+                    micNotice,
+                    ...micSetupWarnings,
+                ].filter(Boolean).join('\n');
                 micBtn.setAttribute('aria-label', 'Stop live mic feedback');
                 micBtn.setAttribute('aria-pressed', 'true');
                 micPillLastText = '';
@@ -1693,7 +1725,10 @@ import { createScorer } from './scoring.js';
         sel.innerHTML = '';
         const def = document.createElement('option');
         def.value = '';
-        def.textContent = 'System default';
+        const sysDefault = devices.find((d) => d.deviceId === 'default');
+        def.textContent = sysDefault && !/^Microphone \d+$/.test(sysDefault.label)
+            ? `System default (${sysDefault.label.replace(/^Default - /, '')})`
+            : 'System default';
         sel.appendChild(def);
         for (const d of devices) {
             if (!d.deviceId || d.deviceId === 'default') continue;

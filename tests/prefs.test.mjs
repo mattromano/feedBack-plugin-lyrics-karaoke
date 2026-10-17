@@ -2,7 +2,7 @@ import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     getDifficulty, setDifficulty, getDeviceId, setDeviceId, getLatencyMs, setLatencyMs,
-    micConstraints, isDeviceMissingError, listInputDevices, micSongTime, savedDeviceLabel,
+    micConstraints, isDeviceMissingError, listInputDevices, micSongTime, savedDeviceLabel, micWarnings,
 } from '../src/prefs.js';
 
 function mapStorage() {
@@ -119,4 +119,19 @@ test('savedDeviceLabel only calls a saved mic "not connected" when ids are visib
     // Before mic permission Chromium returns empty ids — can't tell, don't claim it's unplugged.
     assert.equal(savedDeviceLabel([{ deviceId: '', label: 'Microphone 1' }], 'jabra'), 'Saved microphone');
     assert.equal(savedDeviceLabel(named, ''), null);
+});
+
+test('micWarnings flags the built-in mic and speaker output', () => {
+    const speakers = [{ kind: 'audiooutput', deviceId: 'default', label: 'Default - MacBook Pro Speakers' }];
+    const headset = [{ kind: 'audiooutput', deviceId: 'default', label: 'Default - Jabra EVOLVE 20' }];
+    assert.deepEqual(micWarnings('MacBook Pro Microphone', speakers), [
+        'Using the built-in mic — pick your headset in Settings → Lyrics Karaoke.',
+        'The song is playing through MacBook Pro Speakers — the mic will hear it. Use headphones.',
+    ]);
+    assert.deepEqual(micWarnings('Jabra EVOLVE 20', headset), []);
+    assert.deepEqual(micWarnings('Default - MacBook Pro Microphone (Built-in)', headset),
+        ['Using the built-in mic — pick your headset in Settings → Lyrics Karaoke.']);
+    // Unknown output (no labels before permission) → no speaker warning.
+    assert.deepEqual(micWarnings('Jabra EVOLVE 20', [{ kind: 'audiooutput', deviceId: 'default', label: '' }]), []);
+    assert.deepEqual(micWarnings('', []), []);
 });

@@ -94,3 +94,24 @@ export function savedDeviceLabel(devices, savedId) {
     const idsVisible = devices.some((d) => d.deviceId);
     return idsVisible ? 'Saved microphone (not connected)' : 'Saved microphone';
 }
+
+const BUILT_IN_MIC = /built-?in|macbook|internal/i;
+
+/**
+ * Plain-language problems with the current mic setup, given the active mic's
+ * label and enumerateDevices() output. A built-in laptop mic, or song audio
+ * on speakers, means the mic hears the backing track and scoring is garbage.
+ */
+export function micWarnings(micLabel, devices) {
+    const out = [];
+    if (micLabel && BUILT_IN_MIC.test(micLabel)) {
+        out.push('Using the built-in mic — pick your headset in Settings → Lyrics Karaoke.');
+    }
+    const outputs = (devices || []).filter((d) => d.kind === 'audiooutput');
+    const def = outputs.find((d) => d.deviceId === 'default') || outputs[0];
+    const outName = def && def.label ? def.label.replace(/^Default - /, '') : '';
+    if (/speaker/i.test(outName)) {
+        out.push(`The song is playing through ${outName} — the mic will hear it. Use headphones.`);
+    }
+    return out;
+}
