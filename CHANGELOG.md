@@ -5,7 +5,14 @@
 ### Added
 - Hear yourself: while the karaoke mic is on, your voice plays through the same device
   as the game's audio (not forced into a headset), with a 🔊 volume slider next to the
-  mic picker and a limiter so loud notes don't clip.
+  mic picker and a limiter so loud notes don't clip. The slider boosts (50% = +12 dB,
+  100% = +30 dB) because a headset mic with auto-gain off sits ~20 dB under the song.
+- Pitch feedback you can see: an arrow at the playhead and a trail over what you just
+  sang, green inside the difficulty's tolerance and orange outside, drawn in the octave
+  nearest the note so singing an octave low lines up with the bars. The note you're on
+  glows while you hold it in tune.
+- `lyricsKaraokeDiag()` in the DevTools console reports mic level, voiced samples and
+  routing for debugging.
 
 ### Changed
 - Karaoke never opens a microphone you didn't pick. With no mic chosen, 🎤 says "Pick a

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     DIFFICULTIES, DEFAULT_DIFFICULTY, pitchClassCents, sampleCredit,
-    freqToMidi, midiToName, yinDetect,
+    freqToMidi, midiToName, yinDetect, foldToTarget, monitorGainFor,
 } from '../src/pitch.js';
 
 const close = (a, b, eps = 1e-9) => assert.ok(Math.abs(a - b) <= eps, `${a} !≈ ${b}`);
@@ -41,4 +41,19 @@ test('yinDetect finds a 220 Hz sine', () => {
 test('note names and frequency conversion', () => {
     assert.equal(midiToName(69), 'A4');
     close(freqToMidi(440), 69);
+});
+
+test('foldToTarget draws your pitch in the octave nearest the target note', () => {
+    close(foldToTarget(48, 60), 60);        // an octave low lines up with the bar
+    close(foldToTarget(73, 60), 61);        // an octave + semitone high → a semitone sharp
+    close(foldToTarget(65.4, 60), 65.4);    // within ±6 semitones: unchanged
+    close(foldToTarget(53.5, 60), 65.5);    // −6.5 st folds up to +5.5 (nearest octave)
+    assert.equal(foldToTarget(55, null), 55); // no target: raw pitch
+});
+
+test('monitorGainFor gives a headset mic real boost: 0 = off, 50% = +12 dB, 100% = +30 dB', () => {
+    assert.equal(monitorGainFor(0), 0);
+    close(20 * Math.log10(monitorGainFor(0.5)), 12, 1e-9);
+    close(20 * Math.log10(monitorGainFor(1)), 30, 1e-9);
+    close(20 * Math.log10(monitorGainFor(0.25)), 3, 1e-9);
 });

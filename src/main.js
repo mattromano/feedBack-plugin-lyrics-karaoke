@@ -20,7 +20,7 @@
  * lyrics_sync directory remains as a redirect stub for users with
  * bookmarks pointing at it.
  */
-import { DIFFICULTIES, freqToMidi, midiToName, yinDetect } from './pitch.js';
+import { DIFFICULTIES, freqToMidi, midiToName, yinDetect, pitchClassCents, foldToTarget, monitorGainFor } from './pitch.js';
 import {
     getDifficulty, setDifficulty, getDeviceId, setDeviceId, getLatencyMs, setLatencyMs,
     listInputDevices, micConstraints, isDeviceMissingError, micSongTime, savedDeviceLabel, micWarnings,
@@ -607,29 +607,94 @@ import { createScorer } from './scoring.js';
                 roundFillRect(ctx, x, y, w, barHeight, BAR_RADIUS * dpr);
             }
 
+            // Pitch feedback, SingStar/Rock Band style. Your pitch is drawn in
+            // the octave nearest the target note (scoring ignores octave too),
+            // as a trail over what you just sang plus an arrow at the playhead —
+            // green inside the difficulty's tolerance, orange outside.
+            const tolCents = (DIFFICULTIES[getDifficulty()] || DIFFICULTIES.medium).toleranceCents;
+            const targetAt = (t) => {
+                let best = null;
+                for (const { tok, midi } of visible) {
+                    if (midi == null) continue;
+                    if (t >= tok.t && t < tok.t + (tok.d || 0)) return midi;
+                    if (!best || Math.abs(tok.t - t) < Math.abs(best.tok.t - t)) best = { tok, midi };
+                }
+                return best ? best.midi : null;
+            };
+            const yMin = barTop;
+            const yMax = barTop + Math.max(0, barBand - barHeight);
+            const yClip = (m) => Math.max(yMin, Math.min(yMax, yFor(m))) + barHeight / 2;
+            const ON = '#4ade80', OFF = '#fb923c';
+
+            // Trail: samples from the visible past, broken at gaps.
+            const trailFrom = now - PLAYHEAD_FRAC * VISIBLE_SECONDS;
+            ctx.lineWidth = 3 * dpr;
+            ctx.lineCap = 'round';
+            let prev = null;
+            for (const smp of userPitchSamples) {
+                if (smp.t < trailFrom || smp.t > now) { prev = null; continue; }
+                const target = targetAt(smp.t);
+                const shown = foldToTarget(smp.midi, target);
+                const onPitch = target != null && Math.abs(pitchClassCents(smp.midi, target)) <= tolCents;
+                const pt = { x: xFor(smp.t), y: yClip(shown), t: smp.t };
+                if (prev && pt.t - prev.t < 0.15) {
+                    // Dark outline first so the trail reads over same-colour bars.
+                    ctx.strokeStyle = 'rgba(0, 0, 0, 0.75)';
+                    ctx.lineWidth = 6 * dpr;
+                    ctx.beginPath();
+                    ctx.moveTo(prev.x, prev.y);
+                    ctx.lineTo(pt.x, pt.y);
+                    ctx.stroke();
+                    ctx.strokeStyle = onPitch ? ON : OFF;
+                    ctx.lineWidth = 3 * dpr;
+                    ctx.beginPath();
+                    ctx.moveTo(prev.x, prev.y);
+                    ctx.lineTo(pt.x, pt.y);
+                    ctx.stroke();
+                }
+                prev = pt;
+            }
+
             // Freshness uses wall-clock ms, not song time — when playback
             // is paused getNow() stops advancing but the user has stopped
-            // singing live too, so the line/pill should still age out.
+            // singing live too, so the arrow/pill should still age out.
             const fresh = (_wallNow() - userLastSampleWallAt) <= _LK_SAMPLE_FRESH_MS;
             if (fresh && userPitchSamples.length) {
                 const last = userPitchSamples[userPitchSamples.length - 1];
-                if (userDisplayMidi == null) {
-                    userDisplayMidi = last.midi;
+                const target = targetAt(now);
+                const shownNow = foldToTarget(last.midi, target);
+                if (userDisplayMidi == null || Math.abs(shownNow - userDisplayMidi) > 6) {
+                    userDisplayMidi = shownNow;
                 } else {
-                    // Simple low-pass (α=0.4) keeps the line from snapping
+                    // Simple low-pass (α=0.4) keeps the arrow from snapping
                     // jaggedly between adjacent semitones without lagging.
-                    userDisplayMidi += 0.4 * (last.midi - userDisplayMidi);
+                    userDisplayMidi += 0.4 * (shownNow - userDisplayMidi);
                 }
-                const drawMidi = Math.round(userDisplayMidi);
-                const yLine = yFor(drawMidi);
-                const yMin = barTop;
-                const yMax = barTop + Math.max(0, barBand - barHeight);
-                const yClipped = Math.max(yMin, Math.min(yMax, yLine));
-                ctx.fillStyle = _LK_PITCH_LINE_COLOR;
-                const lineX = playheadX - 30 * dpr;
-                const lineW = 34 * dpr;
-                const lineY = yClipped + barHeight / 2 - 1.5 * dpr;
-                ctx.fillRect(lineX, lineY, lineW, 3 * dpr);
+                const onPitch = target != null && Math.abs(pitchClassCents(last.midi, target)) <= tolCents;
+                const y = yClip(userDisplayMidi);
+                const sz = 9 * dpr;
+                ctx.fillStyle = onPitch ? ON : OFF;
+                ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
+                ctx.lineWidth = 2 * dpr;
+                ctx.beginPath();
+                ctx.moveTo(playheadX + 2 * dpr, y);
+                ctx.lineTo(playheadX - sz * 1.6, y - sz);
+                ctx.lineTo(playheadX - sz * 1.6, y + sz);
+                ctx.closePath();
+                ctx.fill();
+                ctx.stroke();
+
+                // Glow the note you're singing while you're on it.
+                if (onPitch) {
+                    for (const { tok, midi } of visible) {
+                        if (midi == null || !(now >= tok.t && now < tok.t + (tok.d || 0))) continue;
+                        const x0 = xFor(tok.t) + BAR_PAD_PX * dpr;
+                        const w = Math.max(2 * dpr, xFor(tok.t + (tok.d || 0)) - xFor(tok.t) - 2 * BAR_PAD_PX * dpr);
+                        ctx.strokeStyle = ON;
+                        ctx.lineWidth = 2.5 * dpr;
+                        ctx.strokeRect(x0, yFor(midi), w, barHeight);
+                    }
+                }
             } else {
                 // Discard the smoothed value so re-acquire snaps cleanly
                 // rather than drifting from the last fresh pitch.
@@ -746,7 +811,6 @@ import { createScorer } from './scoring.js';
     const _LK_SAMPLE_FRESH_MS = 200;  // stale samples don't draw the user line
     const _LK_SAMPLE_RING_CAP = 256;  // ~12 s at 50 ms cadence
     const _LK_STORAGE_KEY = 'lyrics_karaoke.micFeedback';
-    const _LK_PITCH_LINE_COLOR = '#22d3ee';
     const _LK_RATING_SHOW_MS = 1200;
     const _LK_RATING_COLORS = {
         Awesome: '#ffe080', Strong: '#ffe080',
@@ -780,6 +844,7 @@ import { createScorer } from './scoring.js';
     let micSelect = null;                // in-player microphone <select>
     let monitorSlider = null;            // in-player voice-volume slider
     let monitorGain = null;              // GainNode: your voice → the game's output
+    const diag = { frames: 0, rmsDb: -Infinity, peakDb: -Infinity, voiced: 0, unvoiced: 0, lastMidi: null, lastConfidence: 0 };
     // Session-scoped intent: "the user enabled mic for THIS song." Used
     // to auto-restore the mic when karaoke is toggled off and back on
     // for the same song without spilling that intent across songs (a
@@ -839,7 +904,9 @@ import { createScorer } from './scoring.js';
         micLastCapturedAt = capturedAt;
 
         const r = yinDetect(buffer, sampleRate, _LK_YIN_MIN_HZ);
-        if (!r || r.freq <= 0 || r.confidence < _LK_YIN_CONFIDENCE) return;
+        diag.lastConfidence = r ? r.confidence : 0;
+        if (!r || r.freq <= 0 || r.confidence < _LK_YIN_CONFIDENCE) { diag.unvoiced += 1; return; }
+        diag.voiced += 1;
         if (r.freq < _LK_YIN_MIN_HZ || r.freq > _LK_YIN_MAX_HZ) return;
         const midi = freqToMidi(r.freq);
         if (!isFinite(midi)) return;
@@ -848,6 +915,7 @@ import { createScorer } from './scoring.js';
         if (userPitchSamples.length > _LK_SAMPLE_RING_CAP) userPitchSamples.shift();
         userLastSampleWallAt = _wallNow();
 
+        diag.lastMidi = midi;
         if (scorer) scorer.addSample({ t: capturedAt, midi });
     }
 
@@ -951,6 +1019,12 @@ import { createScorer } from './scoring.js';
                 if (micState !== 'listening') return;
                 const input = e.inputBuffer.getChannelData(0);
                 const n = input.length;
+                // Level meter for diagnostics (cheap: one pass per ~43 ms block).
+                let sumSq = 0, peak = 0;
+                for (let i = 0; i < n; i++) { const v = input[i]; sumSq += v * v; const a = v < 0 ? -v : v; if (a > peak) peak = a; }
+                diag.frames += 1;
+                diag.rmsDb = 10 * Math.log10(sumSq / n || 1e-12);
+                diag.peakDb = 20 * Math.log10(peak || 1e-6);
                 // Slide the ring buffer left by n samples (in-place, no allocation):
                 // copies bytes [n .. ringSize-1] to [0 .. ringSize-n-1],
                 // then the new frame fills the vacated tail.
@@ -983,7 +1057,7 @@ import { createScorer } from './scoring.js';
             // game's audio, at the user's volume. A hard limiter keeps a loud
             // note (or the start of a feedback howl) from clipping harshly.
             monitorGain = micCtx.createGain();
-            monitorGain.gain.value = getMonitorVolume();
+            monitorGain.gain.value = monitorGainFor(getMonitorVolume());
             const limiter = micCtx.createDynamicsCompressor();
             limiter.threshold.value = -6;
             limiter.knee.value = 0;
@@ -1155,7 +1229,7 @@ import { createScorer } from './scoring.js';
         monitorSlider.addEventListener('input', () => {
             setMonitorVolume(Number(monitorSlider.value) / 100);
             monitorSlider.title = `Your voice volume: ${monitorSlider.value}%`;
-            if (monitorGain && micCtx) monitorGain.gain.setTargetAtTime(getMonitorVolume(), micCtx.currentTime, 0.02);
+            if (monitorGain && micCtx) monitorGain.gain.setTargetAtTime(monitorGainFor(getMonitorVolume()), micCtx.currentTime, 0.02);
         });
         monitorSlider.addEventListener('change', () => monitorSlider.blur());
         toggleBtn.parentNode.insertBefore(monitorSlider, micSelect.nextSibling);
@@ -1796,6 +1870,18 @@ import { createScorer } from './scoring.js';
             refreshSetupStatus();
         }
     }
+
+    // Read-only diagnostics for debugging a live session (DevTools console:
+    // lyricsKaraokeDiag()). Never mutates state.
+    window.lyricsKaraokeDiag = () => ({
+        micState, micErrorMsg, device: micDeviceLabel, warnings: micSetupWarnings.slice(),
+        ctxState: micCtx ? micCtx.state : null,
+        sampleRate: micCtx ? micCtx.sampleRate : null,
+        sinkId: micCtx && 'sinkId' in micCtx ? micCtx.sinkId : null,
+        monitorGain: monitorGain ? monitorGain.gain.value : null,
+        trackState: micStream ? micStream.getAudioTracks().map((t) => ({ label: t.label, enabled: t.enabled, muted: t.muted, readyState: t.readyState })) : null,
+        ...diag,
+    });
 
     // Expose setup-screen API for inline onclick= handlers.
     window.lkSearchSongs = lkSearchSongs;

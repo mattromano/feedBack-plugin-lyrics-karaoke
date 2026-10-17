@@ -92,3 +92,20 @@ export function yinDetect(buffer, sampleRate, minFreqHz) {
         confidence: Math.max(0, 1 - yinBuffer[tau]),
     };
 }
+
+/** Your pitch moved into the octave nearest `targetMidi`, for drawing it
+ *  against the chart's bars (scoring already ignores octave). */
+export function foldToTarget(midi, targetMidi) {
+    if (typeof targetMidi !== 'number') return midi;
+    return targetMidi + pitchClassCents(midi, targetMidi) / 100;
+}
+
+/**
+ * Linear gain for the vocal monitor from the 0–1 slider. A headset mic with
+ * auto-gain off sits ~20 dB under a mastered song, so the range is boost:
+ * 0 = off, then −6 dB … +30 dB (50% = +12 dB). A limiter follows it.
+ */
+export function monitorGainFor(volume) {
+    if (!(volume > 0)) return 0;
+    return Math.pow(10, (36 * Math.min(1, volume) - 6) / 20);
+}
