@@ -115,3 +115,44 @@ export function micWarnings(micLabel, devices) {
     }
     return out;
 }
+
+export const SHOW_MIC_NAMES = '__show-mic-names__';
+
+/**
+ * <option> data for a mic picker. The first entry is a "Choose a
+ * microphone…" prompt, never a system default: karaoke only ever opens the
+ * mic the user picked. Chrome's "default" alias and id-less entries (before
+ * mic permission) are skipped; a saved-but-unlisted mic stays selectable.
+ */
+export function buildMicOptions(devices, savedId) {
+    const list = devices || [];
+    const opts = [{ value: '', label: 'Choose a microphone…' }];
+    for (const d of list) {
+        if (!d.deviceId || d.deviceId === 'default') continue;
+        opts.push({ value: d.deviceId, label: d.label });
+    }
+    const extra = savedDeviceLabel(list, savedId);
+    if (extra) opts.push({ value: savedId, label: extra });
+    // Before mic permission the browser hides every name and id; offer an
+    // explicit way to unlock them instead of silently opening a default mic.
+    if (!list.some((d) => d.deviceId && d.deviceId !== 'default')) {
+        opts.push({ value: SHOW_MIC_NAMES, label: 'Show microphone names…' });
+    }
+    const pick = opts.some((o) => o.value === savedId) ? savedId : '';
+    return opts.map((o) => ({ ...o, selected: o.value === pick }));
+}
+
+/**
+ * Why the mic must not start, or null when it may. No choice yet, or the
+ * chosen mic visibly unplugged, both stop here — there is no fallback to
+ * another device.
+ */
+export function micStartError(deviceId, devices) {
+    if (!deviceId) return 'Pick a microphone first.';
+    const list = devices || [];
+    const idsVisible = list.some((d) => d.deviceId);
+    if (idsVisible && !list.some((d) => d.deviceId === deviceId)) {
+        return "Your chosen microphone isn't connected — plug it in or pick another.";
+    }
+    return null;
+}

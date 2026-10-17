@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- Karaoke never opens a microphone you didn't pick. With no mic chosen, 🎤 says "Pick a
+  microphone first" instead of using the system default. If your chosen mic is unplugged
+  it tells you rather than falling back to another one.
+- A microphone picker sits next to 🎤 in the player. The settings page moved to
+  Settings → Microphone & Detection.
+
+### Added
+- The 🎤 tooltip names the mic in use, and a red line on the karaoke strip warns when it
+  is a built-in laptop mic or the song is playing through speakers.
+- `tools/batch_generate_pitch.py` generates karaoke pitch for a whole library.
+
 ## [1.5.0] - 2026-10-16
 
 ### Added

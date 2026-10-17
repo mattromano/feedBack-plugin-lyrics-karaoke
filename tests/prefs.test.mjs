@@ -2,7 +2,7 @@ import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     getDifficulty, setDifficulty, getDeviceId, setDeviceId, getLatencyMs, setLatencyMs,
-    micConstraints, isDeviceMissingError, listInputDevices, micSongTime, savedDeviceLabel, micWarnings,
+    micConstraints, isDeviceMissingError, listInputDevices, micSongTime, savedDeviceLabel, micWarnings, buildMicOptions, micStartError, SHOW_MIC_NAMES,
 } from '../src/prefs.js';
 
 function mapStorage() {
@@ -134,4 +134,34 @@ test('micWarnings flags the built-in mic and speaker output', () => {
     // Unknown output (no labels before permission) → no speaker warning.
     assert.deepEqual(micWarnings('Jabra EVOLVE 20', [{ kind: 'audiooutput', deviceId: 'default', label: '' }]), []);
     assert.deepEqual(micWarnings('', []), []);
+});
+
+test('buildMicOptions starts with a choose prompt (never a system default) and selects the saved mic', () => {
+    const devices = [
+        { deviceId: 'default', label: 'Default - MacBook Pro Microphone' },
+        { deviceId: 'mbp', label: 'MacBook Pro Microphone' },
+        { deviceId: 'jabra', label: 'Jabra EVOLVE 20' },
+    ];
+    assert.deepEqual(buildMicOptions(devices, 'jabra'), [
+        { value: '', label: 'Choose a microphone…', selected: false },
+        { value: 'mbp', label: 'MacBook Pro Microphone', selected: false },
+        { value: 'jabra', label: 'Jabra EVOLVE 20', selected: true },
+    ]);
+    // Nothing saved → system default selected; unnamed devices (no permission yet) keep a plain label.
+    assert.deepEqual(buildMicOptions([{ deviceId: '', label: 'Microphone 1' }], ''), [
+        { value: '', label: 'Choose a microphone…', selected: true },
+        { value: SHOW_MIC_NAMES, label: 'Show microphone names…', selected: false },
+    ]);
+    // Saved but unplugged device stays selectable.
+    assert.deepEqual(buildMicOptions(devices.slice(0, 2), 'jabra').at(-1),
+        { value: 'jabra', label: 'Saved microphone (not connected)', selected: true });
+});
+
+test('micStartError refuses to open any mic until one is chosen, and never substitutes another', () => {
+    const named = [{ deviceId: 'mbp', label: 'MacBook Pro Microphone' }, { deviceId: 'jabra', label: 'Jabra EVOLVE 20' }];
+    assert.equal(micStartError('', named), 'Pick a microphone first.');
+    assert.equal(micStartError('jabra', named), null);
+    assert.equal(micStartError('gone', named), "Your chosen microphone isn't connected — plug it in or pick another.");
+    // Before mic permission ids are hidden: can't tell, so let getUserMedia decide.
+    assert.equal(micStartError('jabra', [{ deviceId: '', label: 'Microphone 1' }]), null);
 });

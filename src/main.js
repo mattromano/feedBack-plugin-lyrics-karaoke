@@ -24,6 +24,7 @@ import { DIFFICULTIES, freqToMidi, midiToName, yinDetect } from './pitch.js';
 import {
     getDifficulty, setDifficulty, getDeviceId, setDeviceId, getLatencyMs, setLatencyMs,
     listInputDevices, micConstraints, isDeviceMissingError, micSongTime, savedDeviceLabel, micWarnings,
+    buildMicOptions, micStartError, SHOW_MIC_NAMES,
 } from './prefs.js';
 import { buildPhrases } from './phrases.js';
 import { createScorer } from './scoring.js';
@@ -339,6 +340,7 @@ import { createScorer } from './scoring.js';
                 }
             }
             showOverlay();
+            refreshMicPickers();   // device names/plugs may have changed since load
             // Restore the mic-on intent if the user had it on for the
             // current song's session. Scoped per-song deliberately —
             // resetForNewSong clears micWantOnForSong, so a one-time
@@ -637,6 +639,20 @@ import { createScorer } from './scoring.js';
             drawHud(dpr, playheadX);
         }
 
+        if (micState === 'error' && micErrorMsg) {
+            const warn = '⚠ ' + micErrorMsg;
+            ctx.save();
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'top';
+            ctx.font = `bold ${Math.round(12 * dpr)}px sans-serif`;
+            const ww = ctx.measureText(warn).width;
+            ctx.fillStyle = 'rgba(8, 8, 14, 0.85)';
+            roundFillRect(ctx, 8 * dpr, 6 * dpr, ww + 12 * dpr, 18 * dpr, 6 * dpr);
+            ctx.fillStyle = '#f87171';
+            ctx.fillText(warn, 14 * dpr, 9 * dpr);
+            ctx.restore();
+        }
+
         // Playhead.
         ctx.strokeStyle = PLAYHEAD_COLOR;
         ctx.lineWidth = Math.max(1, 1.5 * dpr);
@@ -757,11 +773,11 @@ import { createScorer } from './scoring.js';
     let micLastCapturedAt = -Infinity;   // previous frame's song-time, for stall/seek detection
     let micErrorMsg = '';
     let micPillLastText = '';            // last text written to micPill; avoids per-frame DOM writes
-    let micNotice = '';                  // non-fatal note shown in the mic title (e.g. device fallback)
     let micDeviceLabel = '';             // label of the mic actually opened
     let micSetupWarnings = [];           // micWarnings(): built-in mic, speaker output
     let micLatencyMs = 0;                // latency correction read once per mic start
     let diffSelect = null;               // in-player difficulty <select>
+    let micSelect = null;                // in-player microphone <select>
     // Session-scoped intent: "the user enabled mic for THIS song." Used
     // to auto-restore the mic when karaoke is toggled off and back on
     // for the same song without spilling that intent across songs (a
@@ -835,6 +851,15 @@ import { createScorer } from './scoring.js';
 
     async function startMic() {
         if (micState === 'listening' || micState === 'requesting') return;
+        // Only ever open the mic the user picked — no system-default guess.
+        const gate = micStartError(getDeviceId(), []);
+        if (gate) {
+            micErrorMsg = gate;
+            micState = 'error';
+            refreshMicUi();
+            promptMicPicker();
+            return;
+        }
         micState = 'requesting';
         micErrorMsg = '';
         refreshMicUi();
@@ -865,16 +890,14 @@ import { createScorer } from './scoring.js';
                     throw new Error('Audio context is suspended. Click 🎤 again.');
                 }
             }
-            micNotice = '';
-            const wantDeviceId = getDeviceId();
             try {
-                pendingStream = await navigator.mediaDevices.getUserMedia(micConstraints(wantDeviceId));
+                pendingStream = await navigator.mediaDevices.getUserMedia(micConstraints(getDeviceId()));
             } catch (e) {
-                // A saved mic that's been unplugged shouldn't block singing:
-                // fall back to the system default once and say so.
-                if (!wantDeviceId || !isDeviceMissingError(e)) throw e;
-                pendingStream = await navigator.mediaDevices.getUserMedia(micConstraints(''));
-                micNotice = 'Saved mic not found — using system default.';
+                // Never substitute another mic for the one the user chose.
+                if (isDeviceMissingError(e)) {
+                    throw new Error("Your chosen microphone isn't connected — plug it in or pick another.");
+                }
+                throw e;
             }
             if (session !== micSessionGen) {
                 // Stop happened while the permission prompt was open.
@@ -892,6 +915,7 @@ import { createScorer } from './scoring.js';
                 micSetupWarnings = micWarnings(micDeviceLabel, devices);
                 refreshMicUi();
             });
+            refreshMicPickers();
             micSourceNode = micCtx.createMediaStreamSource(micStream);
             micProcessor = micCtx.createScriptProcessor(_LK_YIN_FRAME_SIZE, 1, 1);
             // Preallocate fixed-size buffers to avoid per-frame Float32Array
@@ -1074,9 +1098,25 @@ import { createScorer } from './scoring.js';
         });
         toggleBtn.parentNode.insertBefore(diffSelect, micPill.nextSibling);
 
+        micSelect = document.createElement('select');
+        micSelect.id = 'btn-karaoke-mic-device';
+        micSelect.className = 'ml-1 bg-dark-600 text-gray-300 text-xs rounded-lg px-2 py-1.5 max-w-[11rem]';
+        micSelect.title = 'Microphone for karaoke';
+        micSelect.setAttribute('aria-label', 'Microphone for karaoke');
+        micSelect.addEventListener('change', () => {
+            onMicDeviceChosen(micSelect.value);
+            micSelect.blur();
+        });
+        toggleBtn.parentNode.insertBefore(micSelect, diffSelect.nextSibling);
+        refreshMicPickers();
+        if (navigator.mediaDevices && typeof navigator.mediaDevices.addEventListener === 'function') {
+            navigator.mediaDevices.addEventListener('devicechange', () => refreshMicPickers());
+        }
+
         micBtn.style.display = 'none';
         micPill.style.display = 'none';
         diffSelect.style.display = 'none';
+        micSelect.style.display = 'none';
     }
 
     async function onMicClick() {
@@ -1099,6 +1139,7 @@ import { createScorer } from './scoring.js';
         const sloppak = isSloppakSong(currentSong);
         const eligible = sloppak && karaokeMode && !!status && status.has_pitch && songHasMidi();
         if (diffSelect) diffSelect.style.display = eligible ? '' : 'none';
+        if (micSelect) micSelect.style.display = eligible ? '' : 'none';
         if (!eligible) {
             micBtn.style.display = 'none';
             if (micPill) micPill.style.display = 'none';
@@ -1120,8 +1161,7 @@ import { createScorer } from './scoring.js';
                 micBtn.disabled = false;
                 micBtn.className = BTN_CLASS_ACTIVE;
                 micBtn.title = [
-                    `Listening on ${micDeviceLabel || 'the default mic'} — click to stop`,
-                    micNotice,
+                    `Listening on ${micDeviceLabel || 'your chosen mic'} — click to stop`,
                     ...micSetupWarnings,
                 ].filter(Boolean).join('\n');
                 micBtn.setAttribute('aria-label', 'Stop live mic feedback');
@@ -1718,37 +1758,62 @@ import { createScorer } from './scoring.js';
     // SETTINGS PAGE — difficulty, mic device, latency (settings.html)
     // ══════════════════════════════════════════════════════════════════
 
+    function applyMicOptions(sel, devices) {
+        sel.innerHTML = '';
+        for (const o of buildMicOptions(devices, getDeviceId())) {
+            const opt = document.createElement('option');
+            opt.value = o.value;
+            opt.textContent = o.label;
+            opt.selected = o.selected;
+            sel.appendChild(opt);
+        }
+    }
+
     async function fillDeviceSelect(sel, msgEl) {
         let devices = [];
         try { devices = await listInputDevices(); } catch (_) { /* noop */ }
-        const saved = getDeviceId();
-        sel.innerHTML = '';
-        const def = document.createElement('option');
-        def.value = '';
-        const sysDefault = devices.find((d) => d.deviceId === 'default');
-        def.textContent = sysDefault && !/^Microphone \d+$/.test(sysDefault.label)
-            ? `System default (${sysDefault.label.replace(/^Default - /, '')})`
-            : 'System default';
-        sel.appendChild(def);
-        for (const d of devices) {
-            if (!d.deviceId || d.deviceId === 'default') continue;
-            const opt = document.createElement('option');
-            opt.value = d.deviceId;
-            opt.textContent = d.label;
-            sel.appendChild(opt);
-        }
-        const savedLabel = savedDeviceLabel(devices, saved);
-        if (savedLabel) {
-            // Keep the saved choice selectable even when it isn't listed.
-            const opt = document.createElement('option');
-            opt.value = saved;
-            opt.textContent = savedLabel;
-            sel.appendChild(opt);
-        }
-        sel.value = saved;
+        applyMicOptions(sel, devices);
         if (msgEl) {
             const unnamed = devices.length > 0 && devices.every((d) => /^Microphone \d+$/.test(d.label));
             msgEl.textContent = unnamed ? 'Click "Show device names" to see microphone names.' : '';
+        }
+    }
+
+    // Keep every mic picker (settings page + player) in step with the
+    // saved choice and the devices currently plugged in.
+    async function refreshMicPickers() {
+        let devices = [];
+        try { devices = await listInputDevices(); } catch (_) { /* noop */ }
+        if (micSelect) applyMicOptions(micSelect, devices);
+        const setSel = document.getElementById('lk-set-device');
+        if (setSel) applyMicOptions(setSel, devices);
+    }
+
+    // Explicit, user-requested permission prompt so device names appear.
+    // The stream is stopped at once; nothing listens to it.
+    async function unlockMicNames() {
+        try {
+            const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+            s.getTracks().forEach((t) => t.stop());
+        } catch (_) { /* permission denied — the list stays unnamed */ }
+        refreshMicPickers();
+    }
+
+    function promptMicPicker() {
+        if (!micSelect || micSelect.style.display === 'none') return;
+        micSelect.classList.add('ring-2', 'ring-red-400');
+        try { micSelect.focus(); } catch (_) { /* noop */ }
+    }
+
+    async function onMicDeviceChosen(deviceId) {
+        if (micSelect) micSelect.classList.remove('ring-2', 'ring-red-400');
+        if (deviceId === SHOW_MIC_NAMES) { await unlockMicNames(); return; }
+        setDeviceId(deviceId);
+        refreshMicPickers();
+        // Switch the live mic straight away rather than on the next start.
+        if (micState === 'listening' || micState === 'error') {
+            stopMic({ keepFlag: true });
+            await startMic();
         }
     }
 
@@ -1771,7 +1836,7 @@ import { createScorer } from './scoring.js';
         const namesBtn = document.getElementById('lk-set-device-names');
         if (devSel) {
             fillDeviceSelect(devSel, devMsg);
-            devSel.addEventListener('change', () => setDeviceId(devSel.value));
+            devSel.addEventListener('change', () => onMicDeviceChosen(devSel.value));
         }
         if (namesBtn && devSel) {
             namesBtn.addEventListener('click', async () => {
