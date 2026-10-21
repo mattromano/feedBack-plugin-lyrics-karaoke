@@ -9,7 +9,9 @@
  * the next one's start, so a sung onset can't deploy it. While active it
  * drains 1/8 bar per measure of song time and ends at 0.
  * Time only moves forward: an earlier `t` than one already seen counts as
- * the latest. Pure — no DOM.
+ * the latest, except that isActiveAt answers an earlier `t` from the
+ * activation history, so a phrase is doubled by the state at its own end
+ * even when it is rated after a later deploy or drain. Pure — no DOM.
  */
 import { OVERDRIVE } from './yarg-overdrive.js';
 import { earnsOverdrive } from './scoring.js';
@@ -30,6 +32,8 @@ function inPhrase(phrases, t) {
 export function createVocalOverdrive({ clock, phrases } = {}) {
     const phr = Array.isArray(phrases) ? phrases : [];
     let fill, active, lastT;
+    // Activations as [{ from, to }]; `to` is null while the last one is open.
+    let history;
 
     // Returns whether it ended an active overdrive.
     function reset() {
@@ -37,6 +41,7 @@ export function createVocalOverdrive({ clock, phrases } = {}) {
         fill = 0;
         active = false;
         lastT = null;
+        history = [];
         return wasActive;
     }
     reset();
@@ -44,10 +49,28 @@ export function createVocalOverdrive({ clock, phrases } = {}) {
     function advance(t) {
         if (!Number.isFinite(t) || (lastT !== null && t <= lastT)) return;
         if (active && lastT !== null) {
-            fill -= (clock.measureAt(t) - clock.measureAt(lastT)) / OVERDRIVE.barMeasures;
-            if (fill <= EMPTY_EPS) { fill = 0; active = false; }
+            const fromM = clock.measureAt(lastT);
+            const before = fill;
+            fill -= (clock.measureAt(t) - fromM) / OVERDRIVE.barMeasures;
+            if (fill <= EMPTY_EPS) {
+                fill = 0;
+                active = false;
+                closeActivation(fromM + before * OVERDRIVE.barMeasures, t);
+            }
         }
         lastT = t;
+    }
+
+    // The drain ran out at measure `m`, somewhere before `t`.
+    function closeActivation(m, t) {
+        const open = history[history.length - 1];
+        if (!open || open.to !== null) return;
+        const at = typeof clock.timeAtMeasure === 'function' ? clock.timeAtMeasure(m) : t;
+        open.to = Number.isFinite(at) ? Math.max(open.from, Math.min(at, t)) : t;
+    }
+
+    function wasActiveAt(t) {
+        return history.some((h) => t >= h.from && (h.to === null || t < h.to));
     }
 
     const ready = () => !active && fill >= OVERDRIVE.deployMin;
@@ -63,6 +86,7 @@ export function createVocalOverdrive({ clock, phrases } = {}) {
             advance(t);
             if (!ready() || inPhrase(phr, t)) return false;
             active = true;
+            history.push({ from: lastT ?? t, to: null });
             return true;
         },
         stateAt(t) {
@@ -70,6 +94,7 @@ export function createVocalOverdrive({ clock, phrases } = {}) {
             return { fill, active, ready: ready() };
         },
         isActiveAt(t) {
+            if (Number.isFinite(t) && lastT !== null && t < lastT) return wasActiveAt(t);
             advance(t);
             return active;
         },

@@ -66,7 +66,10 @@ test('times never run backwards: an earlier t is treated as the latest', () => {
     od.micHit(10);
     assert.equal(od.stateAt(18).fill, 0.5);
     assert.equal(od.stateAt(12).fill, 0.5);
-    assert.equal(od.isActiveAt(1), true);
+    // isActiveAt answers an earlier t from history instead: not active before the deploy.
+    assert.equal(od.isActiveAt(1), false);
+    assert.equal(od.isActiveAt(12), true);
+    assert.equal(od.stateAt(18).fill, 0.5);
 });
 
 test('no beats: 2 s per measure', () => {
@@ -153,4 +156,18 @@ test('reset reports whether it ended an active overdrive', () => {
     od.micHit(3);
     assert.equal(od.reset(), true);
     assert.equal(od.reset(), false);
+});
+
+test('isActiveAt answers an earlier time from the activation history', () => {
+    const od = make();
+    for (const t of [1, 2]) od.phrase('Awesome', t);
+    assert.equal(od.micHit(10), true);           // half a bar: 4 measures = 8 s
+    assert.equal(od.stateAt(20).active, false);  // ran out at 18
+    assert.equal(od.isActiveAt(9.9), false);     // before the deploy
+    assert.equal(od.isActiveAt(10), true);
+    assert.equal(od.isActiveAt(17.9), true);
+    assert.equal(od.isActiveAt(18.1), false);    // after the drain ended it
+    assert.equal(od.stateAt(19).fill, 0);        // stateAt still treats it as the latest
+    od.reset();
+    assert.equal(od.isActiveAt(12), false);      // reset clears the history
 });

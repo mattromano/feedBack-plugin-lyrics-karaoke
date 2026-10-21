@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createScorer, rateAccuracy, starsFor, earnsOverdrive, RATINGS } from '../src/scoring.js';
 import { buildPhrases } from '../src/phrases.js';
+import { createVocalOverdrive } from '../src/overdrive.js';
+import { createMeasureClock } from '../src/measure.js';
 
 // One phrase per entry of `phraseNotes`; each note is 1 s long, phrases are
 // separated by 2 s of silence so each phrase ends on a `+` syllable.
@@ -255,4 +257,43 @@ test('without isOverdriveAt no phrase is in overdrive', () => {
     const ev = sc.advanceTo(endOf(s, 0));
     assert.equal(ev[0].overdrive, false);
     assert.equal(ev[0].points, 1000);
+});
+
+// A real meter drives isOverdriveAt; the render loop has already advanced it
+// to "now" (stateAt) before the scorer rates the phrase, as main.js does.
+test('a deploy just after a phrase ends does not double that phrase', () => {
+    const s = song([[60, 62]]);
+    assert.equal(s.phrases[0].end, 2);
+    const beats = Array.from({ length: 40 }, (_, i) => ({ time: i * 0.5, measure: i % 4 === 0 ? i / 4 : -1 }));
+    const od = createVocalOverdrive({ clock: createMeasureClock(beats), phrases: s.phrases });
+    const sc = createScorer({ ...s, difficulty: 'medium', isOverdriveAt: (t) => od.isActiveAt(t) });
+    od.phrase('Awesome', 0.1);
+    od.phrase('Awesome', 0.1);
+    assert.equal(od.stateAt(0.1).ready, true);
+    sing(sc, s, 0, 0);
+    assert.deepEqual(sc.advanceTo(2.05), []);
+    assert.equal(od.micHit(2.1), true);
+    od.stateAt(2.2);
+    const ev = sc.advanceTo(2.3);
+    assert.equal(ev.length, 1);
+    assert.equal(ev[0].overdrive, false);
+    assert.equal(ev[0].points, 1000);
+});
+
+test('a phrase that ended while active stays doubled after the bar runs out', () => {
+    const s = song([[60, 62]]);
+    // Half a bar (4 measures) drains in 2.1 s on this clock.
+    const clock = { measureAt: (t) => (t * 4) / 2.1, timeAtMeasure: (m) => (m * 2.1) / 4 };
+    const od = createVocalOverdrive({ clock });
+    const sc = createScorer({ ...s, difficulty: 'medium', isOverdriveAt: (t) => od.isActiveAt(t) });
+    od.phrase('Awesome', -1);
+    od.phrase('Awesome', -1);
+    assert.equal(od.micHit(0), true);
+    sing(sc, s, 0, 0);
+    assert.equal(od.isActiveAt(2.05), true);
+    assert.equal(od.stateAt(2.2).active, false);   // ran out at about 2.1
+    const ev = sc.advanceTo(2.3);
+    assert.equal(ev.length, 1);
+    assert.equal(ev[0].overdrive, true);
+    assert.equal(ev[0].points, 2000);
 });

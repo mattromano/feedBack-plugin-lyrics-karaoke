@@ -670,9 +670,10 @@ import { createMicHitDetector, levelDb, DEFAULT_MIC_HIT_DB } from './mic-hit.js'
                 overdriveOnPhrases(events, scoreT);
             }
         }
-        // Overdrive drains with song time; say once when it runs out.
+        // Overdrive drains with song time; say once when it runs out. stateAt
+        // is the live state (isActiveAt would answer a jittered-back frame from history).
         if (vocalOd) {
-            const odActive = vocalOd.isActiveAt(scoreT);
+            const odActive = vocalOd.stateAt(scoreT).active;
             if (odWasActive && !odActive) busEmit(OD_EVENTS.end, { t: scoreT });
             odWasActive = odActive;
         }
