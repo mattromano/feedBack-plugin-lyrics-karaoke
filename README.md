@@ -59,12 +59,15 @@ is the event's `detail`):
 
 Vocal overdrive (Rock Band style, numbers from YARG; see `NOTICE.md`): each phrase rated
 Strong or better earns a quarter bar; at half a bar or more a mic hit (a clap or shout into
-the mic) deploys it, at any time while the song plays; a full bar lasts 8 measures. Phrase
+the mic) deploys it in a gap between sung phrases (after a phrase ends and at least 0.25 s
+before the next one starts, so singing never deploys it); a full bar lasts 8 measures. Phrase
 events carry `overdrive`; points double while overdrive is active; `multiplier` stays the
 streak multiplier. A backward seek empties the bar; a forward seek keeps it.
 
 - **`karaoke:od-gain`** `{ fill }`: a phrase earned overdrive.
 - **`karaoke:od-ready`** `{ fill }`: that gain made the bar ready to deploy.
 - **`karaoke:od-activate`** `{ fill, t }`: a mic hit deployed overdrive at song time `t`.
-- **`karaoke:od-end`** `{ t }`: the bar ran out.
-- **`karaoke:mic-hit`** `{ t, db }`: the mic-hit detector fired (whether or not it deployed).
+- **`karaoke:od-end`** `{ t }`: overdrive ended: the bar ran out, or a reset (backward seek,
+  mic stop) emptied it while active.
+- **`karaoke:mic-hit`** `{ t, db, deployed }`: the mic-hit detector fired; `deployed` says
+  whether it deployed overdrive (it doesn't inside a sung phrase or when the bar isn't ready).

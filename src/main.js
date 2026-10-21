@@ -48,6 +48,7 @@ import { createMicHitDetector, levelDb, DEFAULT_MIC_HIT_DB } from './mic-hit.js'
     let scorer = null;               // createScorer() for the current song + difficulty
     let lastRating = null;           // {text, at} — most recent phrase rating, for the HUD pop-up
     let vocalOd = null;              // createVocalOverdrive(), one per scorer build (KRB-8)
+    let odClock = createMeasureClock([]);  // the current song's measures; swapped when beats arrive
     let odWasActive = false;         // overdrive was active at the last check, for karaoke:od-end
     let odFlashAt = null;            // wall-clock ms of the last activation, for the "Overdrive!" flash
     // Level-only clap/shout detector that deploys overdrive; it never touches audio nodes.
@@ -159,13 +160,17 @@ import { createMicHitDetector, levelDb, DEFAULT_MIC_HIT_DB } from './mic-hit.js'
 
     function rebuildScorer() {
         const tokens = (pitchData && Array.isArray(pitchData.tokens)) ? pitchData.tokens : null;
-        const hw = window.highway;
+        refreshOdClock();
+        const phrases = tokens ? buildPhrases(tokens) : [];
+        // The meter reads odClock through this indirection, so beats that
+        // arrive later swap the clock without touching the fill.
         const od = createVocalOverdrive({
-            clock: createMeasureClock(hw && typeof hw.getBeats === 'function' ? hw.getBeats() : []),
+            clock: { measureAt: (t) => odClock.measureAt(t), timeAtMeasure: (m) => odClock.timeAtMeasure(m) },
+            phrases,
         });
         scorer = tokens
             ? createScorer({
-                tokens, phrases: buildPhrases(tokens), difficulty: overrides.difficulty(),
+                tokens, phrases, difficulty: overrides.difficulty(),
                 isOverdriveAt: (t) => od.isActiveAt(t),
             })
             : null;
@@ -173,6 +178,13 @@ import { createMicHitDetector, levelDb, DEFAULT_MIC_HIT_DB } from './mic-hit.js'
         odWasActive = false;
         odFlashAt = null;
         lastRating = null;
+    }
+
+    // Measures from core's highway beats. Core streams the beats separately
+    // (beats:loaded), so this is refreshed then and on song:ready too.
+    function refreshOdClock() {
+        const hw = window.highway;
+        odClock = createMeasureClock(hw && typeof hw.getBeats === 'function' ? hw.getBeats() : []);
     }
 
     // The session override, else the default.
@@ -1027,7 +1039,8 @@ import { createMicHitDetector, levelDb, DEFAULT_MIC_HIT_DB } from './mic-hit.js'
     // A new scoring pass empties the overdrive bar (R5). The mic-hit
     // detector forgets its last hit too, so a rewind can't leave it refractory.
     function resetOverdrive() {
-        if (vocalOd) vocalOd.reset();
+        const ended = vocalOd ? vocalOd.reset() : false;
+        if (ended || odWasActive) busEmit(OD_EVENTS.end, { t: scoringTime(getNow()) });
         micHitDetector.reset();
         micHitLastNow = null;
         odWasActive = false;
@@ -1209,8 +1222,10 @@ import { createMicHitDetector, levelDb, DEFAULT_MIC_HIT_DB } from './mic-hit.js'
                 if (micHitLastNow !== null && clockNow !== micHitLastNow) {
                     const songT = micSongTime(clockNow, (n / 2) / sampleRate, micLatencyMs, getPlaybackRate());
                     if (micHitDetector.push(diag.rmsDb, songT)) {
-                        busEmit(OD_EVENTS.micHit, { t: songT, db: diag.rmsDb });
-                        if (vocalOd && vocalOd.micHit(songT)) {
+                        // Deploys only when ready and in a gap between sung phrases.
+                        const deployed = !!vocalOd && vocalOd.micHit(songT);
+                        busEmit(OD_EVENTS.micHit, { t: songT, db: diag.rmsDb, deployed });
+                        if (deployed) {
                             odWasActive = true;
                             odFlashAt = _wallNow();
                             busEmit(OD_EVENTS.activate, { fill: vocalOd.stateAt(songT).fill, t: songT });
@@ -2132,6 +2147,7 @@ import { createMicHitDetector, levelDb, DEFAULT_MIC_HIT_DB } from './mic-hit.js'
         hearMyself: overrides.hearMyself(),
         scoreHudHidden: overrides.scoreHudHidden(),
         stripHosted: resolveHost() !== document.getElementById('player'),
+        odMeasureAt: (t) => odClock.measureAt(t),
         ...diag,
     });
 
@@ -2350,6 +2366,10 @@ import { createMicHitDetector, levelDb, DEFAULT_MIC_HIT_DB } from './mic-hit.js'
             // arrangement or drum-part switch.
             window.slopsmith.on('song:loading', () => { freshLoad = true; });
             window.slopsmith.on('song:loaded', (e) => onSongLoaded(e && e.detail));
+            // Core's beats for the playing song arrive after song:loaded; the
+            // overdrive meter keeps its fill and drains on the real measures.
+            window.slopsmith.on('beats:loaded', () => refreshOdClock());
+            window.slopsmith.on('song:ready', () => refreshOdClock());
             // Core's single repositioning funnel ({from, to, reason}). Seeks
             // backward start a new scoring pass; forward seeks skip phrases.
             window.slopsmith.on('song:seek', (e) => {

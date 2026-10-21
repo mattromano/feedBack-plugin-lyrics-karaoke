@@ -311,3 +311,24 @@ test('a replay of the same file (song:loading first) resets the mic intent, kara
         await api.setKaraokeMode(false);
     }
 });
+
+test('beats:loaded after the pitch data swaps the overdrive clock to the real measures', async () => {
+    // Pitch data loads first, while core's highway has no beats yet (2 s fallback measures).
+    let hwBeats = [];
+    globalThis.highway = { getBeats: () => hwBeats };
+    try {
+        await playSong(SONG);
+        assert.equal(lyricsKaraokeDiag().odMeasureAt(6), 3, 'fallback: 2 s measures');
+        // Then the beats arrive: 1 s measures (beats every 0.25 s, downbeat every 4th).
+        hwBeats = Array.from({ length: 41 }, (_, i) => ({ time: i * 0.25, measure: i % 4 === 0 ? i / 4 : -1 }));
+        handlers.get('beats:loaded')({ detail: { count: hwBeats.length } });
+        assert.equal(lyricsKaraokeDiag().odMeasureAt(6), 6, 'real measures after beats:loaded');
+        // song:ready refreshes it too.
+        hwBeats = Array.from({ length: 41 }, (_, i) => ({ time: i * 0.5, measure: i % 4 === 0 ? i / 4 : -1 }));
+        handlers.get('song:ready')({ detail: { hasPhraseData: true } });
+        assert.equal(lyricsKaraokeDiag().odMeasureAt(6), 3);
+        assert.equal(api.getOverdrive().fill, 0, 'the swap keeps the meter');
+    } finally {
+        delete globalThis.highway;
+    }
+});

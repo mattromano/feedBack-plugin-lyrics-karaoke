@@ -4,8 +4,8 @@
 
 ### Added
 - Vocal overdrive (KRB-8, YARG numbers; `src/yarg-overdrive.js` is LGPL-3.0, see NOTICE.md):
-  phrases rated Strong or better earn a quarter bar, a clap or shout into the mic deploys it
-  at half a bar or more, and phrase points double while it lasts (8 measures for a full bar).
+  phrases rated Strong or better earn a quarter bar, a clap or shout into the mic between
+  sung phrases deploys it at half a bar or more, and phrase points double while it lasts (8 measures for a full bar).
   A small blue meter under the score pill and an "Overdrive!" flash show it. Plugins get
   `getOverdrive()`, `setMicHitThreshold()`, the shared `micHit` detector and `karaoke:od-*` /
   `karaoke:mic-hit` events.

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createVocalOverdrive } from '../src/overdrive.js';
+import { createVocalOverdrive, MIC_HIT_PHRASE_GUARD_S } from '../src/overdrive.js';
 import { createMeasureClock } from '../src/measure.js';
 
 // Beats every 0.5 s with `measure` set on every 4th: 2 s measures.
@@ -100,4 +100,57 @@ test('reset empties the bar', () => {
     assert.deepEqual(od.stateAt(0), { fill: 0, active: false, ready: false });
     assert.equal(od.phrase('Awesome', 1), true);
     assert.equal(od.stateAt(1).fill, 0.25);
+});
+
+// Sung phrases 0–2 s and 4–8 s: a mic hit deploys only in the gap between them.
+const PHRASES = [{ start: 0, end: 2 }, { start: 4, end: 8 }];
+function readyWithPhrases() {
+    const od = createVocalOverdrive({ clock: createMeasureClock(beats()), phrases: PHRASES });
+    od.phrase('Awesome', 0.5);
+    od.phrase('Awesome', 0.6);
+    return od;
+}
+
+test('the phrase guard is 0.25 s', () => {
+    assert.equal(MIC_HIT_PHRASE_GUARD_S, 0.25);
+});
+
+test('a mic hit mid-phrase does not deploy', () => {
+    const od = readyWithPhrases();
+    assert.equal(od.micHit(1), false);
+    assert.equal(od.micHit(2), false);         // at the phrase end it is still sung
+    assert.deepEqual(od.stateAt(2), { fill: 0.5, active: false, ready: true });
+});
+
+test('a mic hit in the gap deploys', () => {
+    const od = readyWithPhrases();
+    assert.equal(od.micHit(3), true);
+    assert.equal(od.isActiveAt(3), true);
+});
+
+test('a mic hit 0.1 s before the next phrase does not deploy; 0.25 s before does', () => {
+    const od = readyWithPhrases();
+    assert.equal(od.micHit(3.9), false);
+    const od2 = readyWithPhrases();
+    assert.equal(od2.micHit(4 - MIC_HIT_PHRASE_GUARD_S), true);
+});
+
+test('after the last phrase and with no phrases, a hit deploys', () => {
+    const od = readyWithPhrases();
+    assert.equal(od.micHit(9), true);
+    const free = make();                       // no phrases given: no gate
+    free.phrase('Awesome', 1);
+    free.phrase('Awesome', 1.5);
+    assert.equal(free.micHit(1.6), true);
+});
+
+test('reset reports whether it ended an active overdrive', () => {
+    const od = make();
+    assert.equal(od.reset(), false);
+    for (const t of [1, 2, 3, 4]) od.phrase('Awesome', t);
+    assert.equal(od.reset(), false);           // full but not active
+    for (const t of [1, 2]) od.phrase('Awesome', t);
+    od.micHit(3);
+    assert.equal(od.reset(), true);
+    assert.equal(od.reset(), false);
 });
