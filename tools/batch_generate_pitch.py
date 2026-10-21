@@ -10,6 +10,11 @@ Before an archive is rewritten, its original manifest is saved under
 archive are the added vocal_pitch.json and the manifest's `vocal_pitch` key,
 so `--restore` can undo a run exactly from those manifests.
 
+--regenerate re-extracts songs that already have auto pitch (after an extractor
+improvement), never hand-charted ones (`lyrics_source: authored`). The previous
+vocal_pitch.json is saved next to the manifest backup, so use a fresh
+--backup-dir and `--restore` brings the old pitch back.
+
 Needs librosa, numpy, soundfile, pyyaml and fastapi (for importing routes):
 
     python -m venv lkvenv && lkvenv/bin/pip install librosa numpy soundfile pyyaml fastapi
@@ -68,9 +73,12 @@ def _lyrics_tokens(raw) -> list[dict]:
     return out
 
 
-def inspect_sloppak(path: Path) -> dict:
+def inspect_sloppak(path: Path, regenerate: bool = False) -> dict:
     """Decide whether a zip sloppak needs pitch. Returns a dict with
-    `eligible`, a `reason` when not, and `vocals`/`lyrics` when it is."""
+    `eligible`, a `reason` when not, and `vocals`/`lyrics` when it is.
+    With `regenerate`, songs that already have pitch are eligible again,
+    except hand-charted ones (`lyrics_source: authored`, e.g. Rock Band
+    imports), whose pitch no extractor should overwrite."""
     try:
         with zipfile.ZipFile(path) as zf:
             mname = _manifest_name(zf)
@@ -78,7 +86,10 @@ def inspect_sloppak(path: Path) -> dict:
                 return {"eligible": False, "reason": "no manifest"}
             manifest = yaml.safe_load(zf.read(mname)) or {}
             if manifest.get("vocal_pitch"):
-                return {"eligible": False, "reason": "already has pitch"}
+                if not regenerate:
+                    return {"eligible": False, "reason": "already has pitch"}
+                if manifest.get("lyrics_source") == "authored":
+                    return {"eligible": False, "reason": "authored pitch"}
             vocals = next((str(s.get("file", "")).strip() for s in manifest.get("stems") or []
                            if isinstance(s, dict) and str(s.get("id", "")).lower() == "vocals"), "")
             if not vocals or vocals not in zf.namelist():
@@ -136,25 +147,30 @@ def _backup_path(path: Path, dlc_root: Path, backup_root: Path) -> Path:
 
 
 def backup_manifest(path: Path, dlc_root: Path, backup_root: Path) -> Path:
-    """Save the archive's original manifest once (never overwritten)."""
+    """Save the archive's original manifest once (never overwritten), and its
+    existing vocal_pitch.json alongside when a --regenerate run replaces it."""
     dest = _backup_path(path, dlc_root, backup_root)
     if not dest.exists():
         dest.parent.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(path) as zf:
             dest.write_bytes(zf.read(_manifest_name(zf)))
+            if PITCH_NAME in zf.namelist():
+                (dest.parent / PITCH_NAME).write_bytes(zf.read(PITCH_NAME))
     return dest
 
 
 def restore_sloppak(path: Path, dlc_root: Path, backup_root: Path) -> None:
-    """Undo a run: put the saved manifest back and drop vocal_pitch.json."""
+    """Undo a run: put the saved manifest back, and the saved vocal_pitch.json
+    if the archive had one before (otherwise drop it)."""
     saved = _backup_path(path, dlc_root, backup_root)
-    _rewrite(path, saved.read_bytes(), None)
+    old_pitch = saved.parent / PITCH_NAME
+    _rewrite(path, saved.read_bytes(), old_pitch.read_bytes() if old_pitch.exists() else None)
 
 
-def process_one(path_str: str, dlc_root: str, backup_root: str) -> dict:
+def process_one(path_str: str, dlc_root: str, backup_root: str, regenerate: bool = False) -> dict:
     path = Path(path_str)
     started = time.time()
-    info = inspect_sloppak(path)
+    info = inspect_sloppak(path, regenerate)
     if not info["eligible"]:
         return {"file": path_str, "status": "skipped", "reason": info["reason"]}
     import routes  # local: worker processes import librosa lazily via routes
@@ -187,6 +203,9 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=0, help="stop after N eligible songs (0 = all)")
     ap.add_argument("--dry-run", action="store_true", help="only report what would be processed")
     ap.add_argument("--restore", action="store_true", help="undo a previous run from --backup-dir")
+    ap.add_argument("--regenerate", action="store_true",
+                    help="re-extract songs that already have auto pitch (never hand-charted ones); "
+                         "use a fresh --backup-dir so --restore brings back the previous pitch")
     args = ap.parse_args()
 
     dlc = args.dlc.expanduser()
@@ -205,7 +224,7 @@ def main() -> int:
         print(f"restored {restored} archive(s)")
         return 0
 
-    todo = [p for p in paths if inspect_sloppak(p)["eligible"]]
+    todo = [p for p in paths if inspect_sloppak(p, args.regenerate)["eligible"]]
     if args.limit:
         todo = todo[: args.limit]
     print(f"{len(paths)} archive(s) checked, {len(todo)} need pitch")
@@ -217,7 +236,7 @@ def main() -> int:
     counts = {"ok": 0, "failed": 0, "skipped": 0}
     claude_progress("-n", "karaoke-pitch", "-t", str(len(todo)))
     with ProcessPoolExecutor(max_workers=args.workers) as pool, log.open("a") as lf:
-        futures = {pool.submit(process_one, str(p), str(dlc), str(backup)): p for p in todo}
+        futures = {pool.submit(process_one, str(p), str(dlc), str(backup), args.regenerate): p for p in todo}
         for fut in as_completed(futures):
             try:
                 res = fut.result()

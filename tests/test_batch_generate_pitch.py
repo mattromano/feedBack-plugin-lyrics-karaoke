@@ -99,3 +99,39 @@ def test_restore_puts_original_manifest_back_and_drops_pitch(tmp_path):
         assert "vocal_pitch.json" not in zf.namelist()
         assert yaml.safe_load(zf.read("manifest.yaml")) == MANIFEST
         assert zf.read("stems/vocals.ogg") == b"VOX" * 1000
+
+
+OLD_PITCH = json.dumps({"version": 1, "notes": [{"t": 1.0, "d": 0.5, "midi": 57}]})
+
+
+def test_regenerate_reopens_auto_pitch_but_never_authored(tmp_path):
+    auto = make_sloppak(tmp_path / "auto.sloppak",
+                        manifest={**MANIFEST, "vocal_pitch": "vocal_pitch.json"},
+                        extra={"vocal_pitch.json": OLD_PITCH})
+    assert bgp.inspect_sloppak(auto)["reason"] == "already has pitch"
+    assert bgp.inspect_sloppak(auto, regenerate=True)["eligible"] is True
+
+    # A Rock Band / Clone Hero import: its pitch is hand-charted, so a better
+    # extractor still must not overwrite it.
+    charted = make_sloppak(tmp_path / "rb.sloppak",
+                           manifest={**MANIFEST, "vocal_pitch": "vocal_pitch.json",
+                                     "lyrics_source": "authored"},
+                           extra={"vocal_pitch.json": OLD_PITCH})
+    assert bgp.inspect_sloppak(charted, regenerate=True)["reason"] == "authored pitch"
+
+
+def test_regenerate_backup_and_restore_bring_the_old_pitch_back(tmp_path):
+    (tmp_path / "dlc" / "sloppak").mkdir(parents=True)
+    manifest = {**MANIFEST, "vocal_pitch": "vocal_pitch.json"}
+    src = make_sloppak(tmp_path / "dlc" / "sloppak" / "song.sloppak",
+                       manifest=manifest, extra={"vocal_pitch.json": OLD_PITCH})
+    backup_root = tmp_path / "backup"
+    bgp.backup_manifest(src, tmp_path / "dlc", backup_root)
+    assert (backup_root / "sloppak" / "song.sloppak" / "vocal_pitch.json").read_text() == OLD_PITCH
+    bgp.write_pitch_into_sloppak(src, [{"t": 1.0, "d": 0.5, "midi": 62}])
+
+    bgp.restore_sloppak(src, tmp_path / "dlc", backup_root)
+
+    with zipfile.ZipFile(src) as zf:
+        assert zf.read("vocal_pitch.json").decode() == OLD_PITCH
+        assert yaml.safe_load(zf.read("manifest.yaml")) == manifest

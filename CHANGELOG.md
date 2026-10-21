@@ -29,6 +29,14 @@
 - The 🎤 tooltip names the mic in use, and a red line on the karaoke strip warns when it
   is a built-in laptop mic (or a built-in mic over speakers).
 - `tools/batch_generate_pitch.py` generates karaoke pitch for a whole library.
+  `--regenerate` re-runs it over songs that already have auto pitch (never
+  hand-charted Rock Band imports), keeping the old pitch so `--restore` undoes it.
+
+### Fixed
+- Auto pitch on short syllables ("of", "the"): where pYIN isn't confident on any frame,
+  the syllable now takes pYIN's best-guess pitch instead of copying a neighbour's note.
+  Against 40 Harmonix Rock Band vocal charts (6,671 notes) this lifts notes within a
+  semitone of the chart from 74% to 86%, and exact notes from 60% to 69%.
 
 ## [1.5.0] - 2026-10-16
 

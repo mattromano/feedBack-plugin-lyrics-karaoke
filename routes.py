@@ -212,7 +212,11 @@ def _extract_pitch_per_syllable(vocals_path: Path, lyrics: list[dict]) -> list[d
        median midi. pYIN frequently misplaces a syllable an octave up
        or down on quiet/breathy notes; if shifting by ±12 brings the
        token closer to the median, do it.
-    5. Neighbour-borrow midi for any token that still has none so whole
+    5. A syllable with no confidently voiced frame (short pickups like
+       "of" / "the") takes pYIN's best-guess pitch over its frames, which
+       it computes anyway but reports as unvoiced. Measured against a Rock
+       Band chart this beat the neighbour borrow 52 to 28 of 65 syllables.
+    6. Neighbour-borrow midi for any token that still has none so whole
        phrases don't vanish from the chart.
     """
     import numpy as np  # noqa: WPS433 — local import keeps cold start cheap
@@ -229,17 +233,23 @@ def _extract_pitch_per_syllable(vocals_path: Path, lyrics: list[dict]) -> list[d
     wide_fmax = librosa.note_to_hz("C6")  # ~1046 Hz — high female / falsetto
 
     def _run_pyin(fmin, fmax):
-        return librosa.pyin(
+        """(f0 with NaN on unvoiced frames, best-guess f0 on every frame, voiced_prob)."""
+        guess, voiced, prob = librosa.pyin(
             y,
             fmin=fmin,
             fmax=fmax,
             sr=sr,
             frame_length=frame_length,
             hop_length=hop_length,
+            fill_na=None,
         )
+        if guess is None:
+            return None, None, None
+        guess = np.asarray(guess)
+        return np.where(np.asarray(voiced), guess, np.nan), guess, prob
 
     # Pass 1: wide search to find the singer's actual range centre.
-    f0_wide, _voiced_wide, prob_wide = _run_pyin(wide_fmin, wide_fmax)
+    f0_wide, guess_wide, prob_wide = _run_pyin(wide_fmin, wide_fmax)
     if f0_wide is None or len(f0_wide) == 0:
         return []
 
@@ -253,18 +263,30 @@ def _extract_pitch_per_syllable(vocals_path: Path, lyrics: list[dict]) -> list[d
         # range so an outlier-skewed median can't push us out of bounds.
         narrow_fmin = max(wide_fmin, 440.0 * (2 ** ((median_midi - 12 - 69) / 12)))
         narrow_fmax = min(wide_fmax, 440.0 * (2 ** ((median_midi + 12 - 69) / 12)))
-        f0, _voiced, voiced_prob = _run_pyin(narrow_fmin, narrow_fmax)
+        f0, f0_guess, voiced_prob = _run_pyin(narrow_fmin, narrow_fmax)
         if f0 is None or len(f0) == 0:
-            f0, voiced_prob = f0_wide, prob_wide
+            f0, f0_guess, voiced_prob = f0_wide, guess_wide, prob_wide
     else:
         # Not enough voiced material to narrow confidently — keep the
         # wide-range result rather than risk centering on noise.
-        f0, voiced_prob = f0_wide, prob_wide
+        f0, f0_guess, voiced_prob = f0_wide, guess_wide, prob_wide
 
     times = librosa.times_like(f0, sr=sr, hop_length=hop_length)
     f0 = np.asarray(f0)
+    f0_guess = np.asarray(f0_guess)
     voiced_prob = np.asarray(voiced_prob)
     n_frames = len(times)
+
+    def _weighted_mode(hz, w):
+        semitones = np.rint(69 + 12 * np.log2(hz / 440.0)).astype(int)
+        unique = np.unique(semitones)
+        # Summed voicing probability per semitone; the tiny per-frame term
+        # breaks ties (and all-zero weights) by frame count.
+        weights = np.array(
+            [float(w[semitones == u].sum()) + 1e-6 * int((semitones == u).sum()) for u in unique],
+            dtype=float,
+        )
+        return int(unique[int(np.argmax(weights))])
 
     # Per-syllable: weighted mode of semitone-rounded pitches. Frames
     # with low voicing probability still contribute (just less), which
@@ -281,17 +303,12 @@ def _extract_pitch_per_syllable(vocals_path: Path, lyrics: list[dict]) -> list[d
             seg_w = voiced_prob[i0:i1]
             mask = (~np.isnan(seg_hz)) & (seg_hz > 0) & (seg_w > 0.2)
             if mask.any():
-                hz = seg_hz[mask]
-                w = seg_w[mask]
-                semitones = np.rint(69 + 12 * np.log2(hz / 440.0)).astype(int)
-                # Weighted histogram across unique semitones — pick the
-                # one with the highest summed voicing probability.
-                unique = np.unique(semitones)
-                weights = np.array(
-                    [float(w[semitones == u].sum()) for u in unique],
-                    dtype=float,
-                )
-                midi = int(unique[int(np.argmax(weights))])
+                midi = _weighted_mode(seg_hz[mask], seg_w[mask])
+            else:
+                guess = f0_guess[i0:i1]
+                gmask = (~np.isnan(guess)) & (guess > 0)
+                if gmask.any():
+                    midi = _weighted_mode(guess[gmask], seg_w[gmask])
         raw.append({"t": t0, "d": tok["d"], "midi": midi})
 
     # Octave-error correction against LOCAL neighbours, not the song-
