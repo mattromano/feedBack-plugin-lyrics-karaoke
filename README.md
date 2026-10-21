@@ -62,9 +62,8 @@ Strong or better earns a quarter bar; at half a bar or more a mic hit (a clap or
 the mic) deploys it in a gap between sung phrases (after a phrase ends and at least 0.25 s
 before the next one starts). A mic hit inside a sung phrase, from 0.25 s before it starts to
 its end, doesn't deploy; a loud ad-lib or clap between phrases does. A full bar lasts 8
-measures. Phrase
-events carry `overdrive`; points double while overdrive is active; `multiplier` stays the
-streak multiplier. A backward seek empties the bar; a forward seek keeps it.
+measures. Phrase events carry `overdrive`; points double while overdrive is active;
+`multiplier` stays the streak multiplier. A backward seek empties the bar; a forward seek keeps it.
 
 - **`karaoke:od-gain`** `{ fill }`: a phrase earned overdrive.
 - **`karaoke:od-ready`** `{ fill }`: that gain made the bar ready to deploy.
