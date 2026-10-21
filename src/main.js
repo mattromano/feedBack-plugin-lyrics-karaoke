@@ -22,7 +22,7 @@
  */
 import { DIFFICULTIES, freqToMidi, midiToName, yinDetect, pitchClassCents, foldSticky, VOCAL_MIN_HZ, VOCAL_MAX_HZ, VOCAL_CONFIDENCE, monitorGainFor, isHowling } from './pitch.js';
 import {
-    getDifficulty, setDifficulty, getDeviceId, setDeviceId, getLatencyMs, setLatencyMs,
+    getDifficulty as getSavedDifficulty, setDifficulty, getDeviceId, setDeviceId, getLatencyMs, setLatencyMs,
     listInputDevices, micConstraints, isDeviceMissingError, micSongTime, savedDeviceLabel, micWarnings,
     buildMicOptions, micStartError, SHOW_MIC_NAMES, getMonitorVolume, setMonitorVolume, monitorSinkId,
 } from './prefs.js';
@@ -52,7 +52,7 @@ import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './ap
     let songLoadFor = null;          // filename songLoad is loading
     // Session overrides another plugin (Build-a-Band) sets through
     // window.lyricsKaraoke. Never persisted; null clears.
-    const overrides = createSessionOverrides({ getSavedDifficulty: getDifficulty });
+    const overrides = createSessionOverrides({ getSavedDifficulty });
 
     // ── DOM refs ───────────────────────────────────────────────────────
     let toggleBtn = null;
@@ -1005,7 +1005,8 @@ import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './ap
             micErrorMsg = gate;
             micState = 'error';
             refreshMicUi();
-            promptMicPicker();
+            // An API start (the band) shows its own message; never steal focus.
+            if (!(opts && opts.promptPicker === false)) promptMicPicker();
             return;
         }
         micState = 'requesting';
@@ -1205,8 +1206,10 @@ import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './ap
         monitorLimiter = null;
     }
 
-    // Follow the hear-myself override while the mic is open.
+    // Follow the hear-myself override: the voice-volume slider is disabled
+    // while it is off, and an open mic gains or loses its monitor path.
     function applyHearMyself() {
+        refreshMonitorSlider();
         if (micState !== 'listening') return;
         const on = overrides.hearMyself();
         if (on && !monitorGain) connectMonitor();
@@ -1225,6 +1228,10 @@ import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './ap
         const sink = monitorSinkId(await listMediaDevicesSafe(), { juceMode: !!window._juceMode, engineOutput });
         if (session !== micSessionGen || !sink) return;
         try { await ctxForMic.setSinkId(sink); } catch (e) { console.warn('lyrics_karaoke: monitor output switch failed', e); }
+    }
+
+    function refreshMonitorSlider() {
+        if (monitorSlider) monitorSlider.disabled = !overrides.hearMyself();
     }
 
     async function listMediaDevicesSafe() {
@@ -1340,6 +1347,7 @@ import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './ap
         });
         monitorSlider.addEventListener('change', () => monitorSlider.blur());
         toggleBtn.parentNode.insertBefore(monitorSlider, micSelect.nextSibling);
+        refreshMonitorSlider();
         refreshMicPickers();
         if (navigator.mediaDevices && typeof navigator.mediaDevices.addEventListener === 'function') {
             navigator.mediaDevices.addEventListener('devicechange', () => refreshMicPickers());
@@ -1473,14 +1481,22 @@ import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './ap
         return songLoad;
     }
 
+    // An arrangement or drum-part switch re-emits song:loaded for the same
+    // file. Karaoke's data (status, pitch, scorer) is per file, so that keeps
+    // karaoke mode, the strip and the mic; only the song info is refreshed.
+    function isSameSong(song) {
+        return !!(song && currentSong && song.filename && song.filename === currentSong.filename);
+    }
+
     async function loadSong(song) {
-        resetForNewSong(song);
+        if (isSameSong(song)) currentSong = song;
+        else resetForNewSong(song);
         ensureToggleButton();
         refreshButtonState();
         if (!isSloppakSong(song)) return;
-        await fetchStatus(song.filename);
+        if (!status) await fetchStatus(song.filename);
         // Pre-fetch pitch data so the first toggle is instant.
-        if (status && status.has_pitch) {
+        if (status && status.has_pitch && !pitchData) {
             await fetchPitchData(song.filename);
         }
         refreshButtonState();
@@ -1988,7 +2004,7 @@ import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './ap
     // Read-only diagnostics for debugging a live session (DevTools console:
     // lyricsKaraokeDiag()). Never mutates state.
     window.lyricsKaraokeDiag = () => ({
-        micState, micErrorMsg, device: micDeviceLabel, warnings: micSetupWarnings.slice(),
+        micState, micErrorMsg, micWantOnForSong, device: micDeviceLabel, warnings: micSetupWarnings.slice(),
         ctxState: micCtx ? micCtx.state : null,
         sampleRate: micCtx ? micCtx.sampleRate : null,
         sinkId: micCtx && 'sinkId' in micCtx ? micCtx.sinkId : null,
@@ -2014,8 +2030,14 @@ import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './ap
         },
         setKaraokeMode: apiSetKaraokeMode,
         isKaraokeMode: () => karaokeMode,
-        startMic: () => startMic({ persistFlag: false }),
-        stopMic: () => { if (micState !== 'off') { stopMic({ keepFlag: true }); resetUserResults(); } },
+        startMic: () => startMic({ persistFlag: false, promptPicker: false }),
+        // The band's stop ends its mic for the song: a later karaoke toggle
+        // must not reopen it (with karaoke's default hear-myself on).
+        stopMic: () => {
+            micWantOnForSong = false;
+            micPersist = true;
+            if (micState !== 'off') { stopMic({ keepFlag: true }); resetUserResults(); }
+        },
         getMicState: () => micState,
         onDifficultyChanged,
         onDifficultyOverrideSet: refreshDifficultyLock,

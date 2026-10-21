@@ -55,6 +55,13 @@ test('phraseEventDetail merges the scorer event and snapshot verbatim', () => {
     });
 });
 
+test('phraseEventDetail passes every scorer event field through; the snapshot wins the totals', () => {
+    const e = { phraseIndex: 0, rating: 'Good', accuracy: 0.6, points: 600, multiplierBefore: 1, overdrive: 0.25, score: -1 };
+    const d = phraseEventDetail(e, SNAP);
+    assert.equal(d.overdrive, 0.25);
+    assert.equal(d.score, 10);
+});
+
 test('emitScoring emits one karaoke:phrase per event, in order, and survives a throwing emit', () => {
     const events = [
         { phraseIndex: 0, rating: 'Good', accuracy: 0.6, points: 600, multiplierBefore: 1 },

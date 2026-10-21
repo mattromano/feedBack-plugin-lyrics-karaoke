@@ -15,14 +15,13 @@ export function stripHostStyle(hosted) {
         : { position: 'absolute', left: '0', right: '0', top: '60px', bottom: '', height: '140px', pointerEvents: 'none', zIndex: '5' };
 }
 
-/** A scorer `advanceTo` event merged with the scorer's `snapshot()`. */
+/**
+ * A scorer `advanceTo` event merged with the scorer's `snapshot()`. Every
+ * event field passes through; the snapshot's running totals win.
+ */
 export function phraseEventDetail(event, snapshot) {
     return {
-        phraseIndex: event.phraseIndex,
-        rating: event.rating,
-        accuracy: event.accuracy,
-        points: event.points,
-        multiplierBefore: event.multiplierBefore,
+        ...event,
         score: snapshot.score,
         multiplier: snapshot.multiplier,
         streak: snapshot.streak,

@@ -23,15 +23,15 @@ object is missing when the plugin is disabled or hasn't loaded yet.
 | `mountStrip(el \| null)` | `boolean` | Draws the karaoke strip inside `el`, filling it. `null` puts it back in the player (below the HUD row, 140 px tall). A host that is later removed from the page counts as `null`. Returns `false` for anything that isn't an element or `null`. |
 | `setKaraokeMode(on)` | `Promise<boolean>` | Turns karaoke on or off for the current song. Turning it on waits for the song's karaoke data; it resolves `false` if the song has no vocal pitch or changed meanwhile. Resolves the resulting mode. |
 | `isKaraokeMode()` | `boolean` | Whether karaoke is on. |
-| `startMic()` | `Promise<string>` | Opens the mic picked in karaoke's settings (`lyrics_karaoke.deviceId`) and resolves the mic state. It never writes karaoke's saved mic on/off flag. |
-| `stopMic()` | `void` | Closes the mic and resets the score. Karaoke's saved mic on/off flag is left alone. |
+| `startMic()` | `Promise<string>` | Opens the mic picked in karaoke's settings (`lyrics_karaoke.deviceId`) and resolves the mic state. With no mic picked it resolves `'error'` without prompting or focusing karaoke's picker (show your own message). It never writes karaoke's saved mic on/off flag. |
+| `stopMic()` | `void` | Closes the mic and resets the score. It also ends the mic for the song, so turning karaoke back on later doesn't reopen it. Karaoke's saved mic on/off flag is left alone. |
 | `getMicState()` | `string` | `'off'`, `'requesting'`, `'listening'` or `'error'`. |
 | `setDifficulty(id \| null)` | `boolean` | Session difficulty: `easy`, `medium`, `hard` or `expert`. Scoring restarts when the difficulty actually changes. While an override is set (even one equal to the saved difficulty), the player's and the settings page's difficulty pickers show it and are disabled. Any other id returns `false` and changes nothing. |
 | `getDifficulty()` | `string` | The difficulty in effect. |
 | `setHearMyself(on \| null)` | `boolean` | Session switch for hearing your own voice. Off builds no path from the mic to the speakers, and turning it off while singing disconnects it. Default on. A non-boolean returns `false`. |
 | `getHearMyself()` | `boolean` | The hear-myself value in effect. |
-| `setScoreHudHidden(hidden)` | `boolean` | Hides the score / multiplier / stars pill on the strip. Phrase ratings and mic warnings stay. A non-boolean returns `false`. |
-| `isScoreHudHidden()` | `boolean` | Whether the pill is hidden. |
+| `setScoreHudHidden(hidden)` | `boolean` | Hides karaoke's whole scoring HUD on the strip: the score / multiplier / stars pill and any later scoring display, such as an overdrive meter. Phrase ratings and mic warnings stay. A non-boolean returns `false`. |
+| `isScoreHudHidden()` | `boolean` | Whether the scoring HUD is hidden. |
 | `getScore()` | `object \| null` | `{ score, multiplier, streak, stars, ratedCount }`, or `null` with no scorer. |
 
 **Overrides are not saved.** `setDifficulty`, `setHearMyself` and `setScoreHudHidden` last
@@ -45,8 +45,9 @@ is the event's `detail`):
 
 - **`karaoke:phrase`**, once per rated phrase, in order:
   `{ phraseIndex, rating, accuracy, points, multiplierBefore, score, multiplier, streak, stars, ratedCount }`.
-  The first five fields describe the phrase. The last five are the running totals as of the
-  end of the frame that rated it: when one frame rates several phrases, every one of those
-  events carries the same totals, after all of them.
-- **`karaoke:reset`**, when the score starts over (new song, difficulty change, mic
-  turned off, seek): the same totals as `getScore()`, or `null` with no scorer.
+  The first five fields describe the phrase; any further field the scorer adds to a phrase
+  passes through too. The last five are the running totals as of the end of the frame that
+  rated it: when one frame rates several phrases, every one of those events carries the same
+  totals, after all of them. Treat the totals in each `karaoke:phrase` as authoritative.
+- **`karaoke:reset`**, a totals resync (new song, difficulty change, seek): the same
+  totals as `getScore()`, or `null` with no scorer.
