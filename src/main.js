@@ -29,7 +29,10 @@ import {
 import { buildPhrases } from './phrases.js';
 import { createScorer } from './scoring.js';
 import { createSessionOverrides } from './overrides.js';
-import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './api.js';
+import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT, OD_EVENTS } from './api.js';
+import { createMeasureClock } from './measure.js';
+import { createVocalOverdrive } from './overdrive.js';
+import { createMicHitDetector, levelDb, DEFAULT_MIC_HIT_DB } from './mic-hit.js';
 
 (function () {
     'use strict';
@@ -44,6 +47,12 @@ import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './ap
     let songPitchRange = null;       // {lo, hi} fixed across the song so bars don't shift vertically as the window scrolls
     let scorer = null;               // createScorer() for the current song + difficulty
     let lastRating = null;           // {text, at} — most recent phrase rating, for the HUD pop-up
+    let vocalOd = null;              // createVocalOverdrive(), one per scorer build (KRB-8)
+    let odWasActive = false;         // overdrive was active at the last check, for karaoke:od-end
+    let odFlashAt = null;            // wall-clock ms of the last activation, for the "Overdrive!" flash
+    // Level-only clap/shout detector that deploys overdrive; it never touches audio nodes.
+    const micHitDetector = createMicHitDetector({ thresholdDb: DEFAULT_MIC_HIT_DB });
+    let micHitLastNow = null;        // getNow() at the previous mic block: hits only while the song moves
     let karaokeMode = false;         // user toggle
     let savedShowLyrics = true;      // restore on toggle off
     let generating = false;          // suppress double-clicks during /generate
@@ -150,10 +159,47 @@ import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './ap
 
     function rebuildScorer() {
         const tokens = (pitchData && Array.isArray(pitchData.tokens)) ? pitchData.tokens : null;
+        const hw = window.highway;
+        const od = createVocalOverdrive({
+            clock: createMeasureClock(hw && typeof hw.getBeats === 'function' ? hw.getBeats() : []),
+        });
         scorer = tokens
-            ? createScorer({ tokens, phrases: buildPhrases(tokens), difficulty: overrides.difficulty() })
+            ? createScorer({
+                tokens, phrases: buildPhrases(tokens), difficulty: overrides.difficulty(),
+                isOverdriveAt: (t) => od.isActiveAt(t),
+            })
             : null;
+        vocalOd = scorer ? od : null;
+        odWasActive = false;
+        odFlashAt = null;
         lastRating = null;
+    }
+
+    // The session override, else the default.
+    function applyMicHitThreshold() {
+        micHitDetector.setThreshold(overrides.micHitDb() ?? DEFAULT_MIC_HIT_DB);
+    }
+
+    // Latency-corrected song time: what the scorer and the overdrive meter run on.
+    function scoringTime(now) {
+        return now - (micLatencyMs / 1000) * getPlaybackRate();
+    }
+
+    // Earn a quarter bar per Strong+ phrase; emit the gain and, when it made the bar ready, ready.
+    function overdriveOnPhrases(events, t) {
+        if (!vocalOd) return;
+        for (const e of events) {
+            const wasReady = vocalOd.stateAt(t).ready;
+            if (!vocalOd.phrase(e.rating, t)) continue;
+            const st = vocalOd.stateAt(t);
+            busEmit(OD_EVENTS.gain, { fill: st.fill });
+            if (st.ready && !wasReady) busEmit(OD_EVENTS.ready, { fill: st.fill });
+        }
+    }
+
+    function getOverdrive() {
+        if (!vocalOd) return { fill: 0, active: false, ready: false };
+        return vocalOd.stateAt(scoringTime(getNow()));
     }
 
     // Compute a fixed pitch range for the whole song so a syllable's
@@ -603,12 +649,20 @@ import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './ap
 
         // Score phrases the playhead has passed — only while listening,
         // so turning the mic off doesn't rate the rest of the song Awful.
+        const scoreT = scoringTime(now);
         if (scorer && micState === 'listening') {
-            const events = scorer.advanceTo(now - (micLatencyMs / 1000) * getPlaybackRate());
+            const events = scorer.advanceTo(scoreT);
             if (events.length) {
                 lastRating = { text: events[events.length - 1].rating, at: _wallNow() };
                 emitScoring(busEmit, events, scorer.snapshot());
+                overdriveOnPhrases(events, scoreT);
             }
+        }
+        // Overdrive drains with song time; say once when it runs out.
+        if (vocalOd) {
+            const odActive = vocalOd.isActiveAt(scoreT);
+            if (odWasActive && !odActive) busEmit(OD_EVENTS.end, { t: scoreT });
+            odWasActive = odActive;
         }
         const hasScored = !!scorer && scorer.snapshot().ratedCount > 0;
 
@@ -763,9 +817,13 @@ import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './ap
         ctx.save();
         ctx.textBaseline = 'top';
         ctx.textAlign = 'left';
-        // A host with its own score display (Build-a-Band) hides the pill;
-        // warnings and ratings keep their places.
-        if (!overrides.scoreHudHidden()) {
+        // A host with its own score display (Build-a-Band) hides the pill and
+        // the overdrive meter; warnings and ratings keep their places.
+        const hudShown = !overrides.scoreHudHidden();
+        // The overdrive bar sits under the pill; warnings move down to clear it.
+        const odBarShown = hudShown && !!vocalOd;
+        const warnTop = odBarShown ? 34 : 28;
+        if (hudShown) {
             const snap = scorer.snapshot();
             const parts = [
                 [snap.score.toLocaleString(), `bold ${Math.round(15 * dpr)}px sans-serif`, TEXT_COLOR],
@@ -787,6 +845,16 @@ import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './ap
                 ctx.fillText(text, x, y);
                 x += widths[i] + gap;
             });
+            if (odBarShown) {
+                const od = getOverdrive();
+                const barW = total + 12 * dpr;
+                ctx.fillStyle = 'rgba(8, 8, 14, 0.85)';
+                ctx.fillRect(8 * dpr, 28 * dpr, barW, 4 * dpr);
+                if (od.fill > 0) {
+                    ctx.fillStyle = _LK_OD_COLOR;
+                    ctx.fillRect(8 * dpr, 28 * dpr, barW * od.fill, 4 * dpr);
+                }
+            }
         }
         // Mic setup problems (built-in mic, speakers) make scoring meaningless —
         // say so where the singer is looking.
@@ -797,10 +865,12 @@ import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './ap
             ctx.font = `bold ${Math.round(12 * dpr)}px sans-serif`;
             const ww = ctx.measureText(warn).width;
             ctx.fillStyle = 'rgba(8, 8, 14, 0.85)';
-            roundFillRect(ctx, 8 * dpr, 28 * dpr, ww + 12 * dpr, 18 * dpr, 6 * dpr);
+            roundFillRect(ctx, 8 * dpr, warnTop * dpr, ww + 12 * dpr, 18 * dpr, 6 * dpr);
             ctx.fillStyle = '#f87171';
-            ctx.fillText(warn, 14 * dpr, 31 * dpr);
+            ctx.fillText(warn, 14 * dpr, (warnTop + 3) * dpr);
         }
+        const warnShown = micState === 'listening' && (micSetupWarnings.length || _wallNow() < howlNoticeUntil);
+        const ratingY = warnShown ? warnTop + 22 : 26;
 
         if (lastRating) {
             const age = _wallNow() - lastRating.at;
@@ -809,8 +879,20 @@ import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './ap
                 ctx.textAlign = 'center';
                 ctx.font = `bold ${Math.round(16 * dpr)}px sans-serif`;
                 ctx.fillStyle = _LK_RATING_COLORS[lastRating.text] || TEXT_COLOR;
-                const ratingY = (micState === 'listening' && (micSetupWarnings.length || _wallNow() < howlNoticeUntil)) ? 50 : 26;
                 ctx.fillText(lastRating.text, playheadX, ratingY * dpr);
+                ctx.globalAlpha = 1;
+            }
+        }
+        // "Overdrive!" flash after a deploy, fading like the rating.
+        if (hudShown && odFlashAt !== null) {
+            const age = _wallNow() - odFlashAt;
+            if (age < _LK_OD_FLASH_MS) {
+                ctx.globalAlpha = 1 - age / _LK_OD_FLASH_MS;
+                ctx.textAlign = 'center';
+                ctx.font = `bold ${Math.round(16 * dpr)}px sans-serif`;
+                ctx.fillStyle = _LK_OD_COLOR;
+                ctx.fillText('Overdrive!', playheadX, (ratingY + 20) * dpr);
+                ctx.globalAlpha = 1;
             }
         }
         ctx.restore();
@@ -847,6 +929,8 @@ import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './ap
     const _LK_SAMPLE_RING_CAP = 256;  // ~12 s at 50 ms cadence
     const _LK_STORAGE_KEY = 'lyrics_karaoke.micFeedback';
     const _LK_RATING_SHOW_MS = 1200;
+    const _LK_OD_FLASH_MS = 1200;     // "Overdrive!" flash after a deploy
+    const _LK_OD_COLOR = '#5cc8ff';   // overdrive blue, as Build-a-Band's
     const _LK_RATING_COLORS = {
         Awesome: '#ffe080', Strong: '#ffe080',
         Good: '#9be7a0', OK: '#9be7a0',
@@ -929,6 +1013,7 @@ import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './ap
     function resetUserResults() {
         userPitchSamples.length = 0;
         if (scorer) scorer.reset();
+        resetOverdrive();
         lastRating = null;
         userDisplayMidi = null;
         userDisplayShift = null;
@@ -937,6 +1022,16 @@ import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './ap
         // doesn't compare against a stale previous time.
         micLastCapturedAt = -Infinity;
         busEmit(RESET_EVENT, scorer ? scorer.snapshot() : null);
+    }
+
+    // A new scoring pass empties the overdrive bar (R5). The mic-hit
+    // detector forgets its last hit too, so a rewind can't leave it refractory.
+    function resetOverdrive() {
+        if (vocalOd) vocalOd.reset();
+        micHitDetector.reset();
+        micHitLastNow = null;
+        odWasActive = false;
+        odFlashAt = null;
     }
 
     // Core's event bus; a listener's error never breaks karaoke.
@@ -1094,6 +1189,9 @@ import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './ap
             // speed slider mid-song).
             const midpointWallSec = (ringSize / 2) / sampleRate;
             micLatencyMs = getLatencyMs();
+            micHitDetector.reset();
+            micHitLastNow = null;
+            applyMicHitThreshold();
 
             micProcessor.onaudioprocess = (e) => {
                 if (micState !== 'listening') return;
@@ -1103,8 +1201,23 @@ import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './ap
                 let sumSq = 0, peak = 0;
                 for (let i = 0; i < n; i++) { const v = input[i]; sumSq += v * v; const a = v < 0 ? -v : v; if (a > peak) peak = a; }
                 diag.frames += 1;
-                diag.rmsDb = 10 * Math.log10(sumSq / n || 1e-12);
+                diag.rmsDb = levelDb(sumSq / n);
                 diag.peakDb = 20 * Math.log10(peak || 1e-6);
+                // Mic hit (a clap or shout) deploys overdrive — only while the
+                // song clock moves, so a paused song never deploys.
+                const clockNow = getNow();
+                if (micHitLastNow !== null && clockNow !== micHitLastNow) {
+                    const songT = micSongTime(clockNow, (n / 2) / sampleRate, micLatencyMs, getPlaybackRate());
+                    if (micHitDetector.push(diag.rmsDb, songT)) {
+                        busEmit(OD_EVENTS.micHit, { t: songT, db: diag.rmsDb });
+                        if (vocalOd && vocalOd.micHit(songT)) {
+                            odWasActive = true;
+                            odFlashAt = _wallNow();
+                            busEmit(OD_EVENTS.activate, { fill: vocalOd.stateAt(songT).fill, t: songT });
+                        }
+                    }
+                }
+                micHitLastNow = clockNow;
                 // Slide the ring buffer left by n samples (in-place, no allocation):
                 // copies bytes [n .. ringSize-1] to [0 .. ringSize-n-1],
                 // then the new frame fills the vacated tail.
@@ -2048,6 +2161,8 @@ import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './ap
         onDifficultyOverrideSet: refreshDifficultyLock,
         applyHearMyself,
         getSnapshot: () => (scorer ? scorer.snapshot() : null),
+        getOverdrive,
+        applyMicHitThreshold,
     });
 
     // Turn karaoke mode on once the current song's status and pitch data
@@ -2240,6 +2355,9 @@ import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './ap
             window.slopsmith.on('song:seek', (e) => {
                 const to = Number(e && e.detail && e.detail.to);
                 if (!Number.isFinite(to)) return;
+                // A backward seek empties the overdrive bar; a forward one keeps it.
+                const from = Number(e.detail.from);
+                if (Number.isFinite(from) && to < from) resetOverdrive();
                 if (scorer) {
                     scorer.seek(to - (micLatencyMs / 1000) * getPlaybackRate());
                     lastRating = null;

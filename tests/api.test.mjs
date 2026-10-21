@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createSessionOverrides } from '../src/overrides.js';
 import {
     API_VERSION, PHRASE_EVENT, RESET_EVENT,
-    stripHostStyle, phraseEventDetail, emitScoring, createKaraokeApi,
+    stripHostStyle, phraseEventDetail, emitScoring, createKaraokeApi, OD_EVENTS,
 } from '../src/api.js';
 
 const SNAP = { score: 10, multiplier: 2, streak: 1, stars: 1, ratedCount: 1 };
@@ -24,6 +24,7 @@ function setup({ saved = 'medium' } = {}) {
         onDifficultyOverrideSet: () => { log.push(['onDifficultyOverrideSet']); },
         applyHearMyself: () => { log.push(['applyHearMyself']); },
         getSnapshot: () => ({ ...SNAP }),
+        applyMicHitThreshold: () => { log.push(['applyMicHitThreshold']); },
     };
     return { api: createKaraokeApi(deps), log, state };
 }
@@ -170,4 +171,42 @@ test('setKaraokeMode coerces to a boolean', async () => {
 test('getScore returns the snapshot', () => {
     const { api } = setup();
     assert.deepEqual(api.getScore(), SNAP);
+});
+
+test('overdrive event names', () => {
+    assert.deepEqual({ ...OD_EVENTS }, {
+        gain: 'karaoke:od-gain', ready: 'karaoke:od-ready', activate: 'karaoke:od-activate',
+        end: 'karaoke:od-end', micHit: 'karaoke:mic-hit',
+    });
+    assert.equal(Object.isFrozen(OD_EVENTS), true);
+});
+
+test('overdrive API: getOverdrive default, threshold override, shared detector', () => {
+    const { api, log } = setup();
+    assert.deepEqual(api.getOverdrive(), { fill: 0, active: false, ready: false });
+    assert.equal(api.getMicHitThreshold(), -30);
+    assert.equal(api.setMicHitThreshold(-24), true);
+    assert.equal(api.getMicHitThreshold(), -24);
+    assert.equal(count(log, 'applyMicHitThreshold'), 1);
+    assert.equal(api.setMicHitThreshold('x'), false);
+    assert.equal(count(log, 'applyMicHitThreshold'), 1);
+    assert.equal(api.getMicHitThreshold(), -24);
+    assert.equal(api.setMicHitThreshold(null), true);
+    assert.equal(api.getMicHitThreshold(), -30);
+    const d = api.micHit.createDetector({ thresholdDb: -30 });
+    assert.equal(d.push(-60, 0), false);
+    assert.equal(d.push(-28, 0.05), true);
+    assert.equal(api.micHit.riseDb, 25);
+    assert.equal(api.micHit.defaultDb, -30);
+    assert.equal(api.micHit.minDb, -48);
+    assert.equal(api.micHit.maxDb, -12);
+    assert.equal(Object.isFrozen(api.micHit), true);
+});
+
+test('getOverdrive forwards the live meter', () => {
+    const { api } = setup();
+    const deps = { overrides: createSessionOverrides({ getSavedDifficulty: () => 'easy' }),
+        getOverdrive: () => ({ fill: 0.5, active: false, ready: true }) };
+    assert.deepEqual(createKaraokeApi(deps).getOverdrive(), { fill: 0.5, active: false, ready: true });
+    assert.equal(typeof api.getOverdrive, 'function');
 });

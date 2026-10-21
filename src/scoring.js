@@ -5,10 +5,13 @@
  * playhead in song-seconds, so slow-speed practice scores the same as
  * full speed and silence earns nothing. When the playhead passes a phrase
  * (plus a short grace), the phrase is rated, points are awarded at the
- * current multiplier, and the streak/multiplier update.
+ * current multiplier, and the streak/multiplier update. A phrase that ends
+ * while overdrive is active (`isOverdriveAt`) scores double; `multiplier`
+ * stays the streak multiplier (1–4).
  */
 
 import { DIFFICULTIES, DEFAULT_DIFFICULTY, pitchClassCents, sampleCredit } from './pitch.js';
+import { OVERDRIVE } from './yarg-overdrive.js';
 
 export const RATINGS = ['Awesome', 'Strong', 'Good', 'OK', 'Messy', 'Awful'];
 const RATING_FLOORS = [0.90, 0.75, 0.55, 0.35, 0.15, -Infinity];
@@ -46,10 +49,11 @@ export function starsFor(meanAcc) {
     return stars;
 }
 
-export function createScorer({ tokens, phrases, difficulty }) {
+export function createScorer({ tokens, phrases, difficulty, isOverdriveAt }) {
     const diff = DIFFICULTIES[difficulty] || DIFFICULTIES[DEFAULT_DIFFICULTY];
     const toks = Array.isArray(tokens) ? tokens : [];
     const phr = Array.isArray(phrases) ? phrases : [];
+    const odAt = typeof isOverdriveAt === 'function' ? isOverdriveAt : () => false;
 
     let credited;       // Map tokenIdx → credited song-seconds
     let prevT;
@@ -146,13 +150,15 @@ export function createScorer({ tokens, phrases, difficulty }) {
             const accuracy = aSum / wSum;
             const rating = rateAccuracy(accuracy);
             const multiplierBefore = multiplier;
-            const points = Math.round(POINTS_PER_PHRASE * accuracy) * multiplierBefore;
+            const overdrive = !!odAt(phr[phraseIndex].end);
+            const points = Math.round(POINTS_PER_PHRASE * accuracy) * multiplierBefore
+                * (overdrive ? OVERDRIVE.multiplier : 1);
             score += points;
             accSum += accuracy;
             ratedCount += 1;
             streak = STREAK_RATINGS.has(rating) ? streak + 1 : 0;
             multiplier = 1 + Math.min(streak, MAX_MULTIPLIER - 1);
-            events.push({ phraseIndex, rating, accuracy, points, multiplierBefore });
+            events.push({ phraseIndex, rating, accuracy, points, multiplierBefore, overdrive });
         }
         return events;
     }

@@ -62,3 +62,20 @@ test('score HUD hidden toggles and clear resets everything', () => {
     assert.equal(o.hasDifficulty(), false);
     assert.equal(o.hearMyself(), true);
 });
+
+test('mic-hit threshold override clamps, clears and refuses junk', () => {
+    const { o } = make();
+    assert.equal(o.micHitDb(), null);
+    assert.equal(o.setMicHitDb(-60), true);
+    assert.equal(o.micHitDb(), -48);
+    assert.equal(o.setMicHitDb(-24.4), true);
+    assert.equal(o.micHitDb(), -24);
+    assert.equal(o.setMicHitDb(null), true);
+    assert.equal(o.micHitDb(), null);
+    assert.equal(o.setMicHitDb('x'), false);
+    assert.equal(o.setMicHitDb(undefined), false);
+    assert.equal(o.micHitDb(), null);
+    o.setMicHitDb(-20);
+    o.clear();
+    assert.equal(o.micHitDb(), null);
+});

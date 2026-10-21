@@ -133,6 +133,17 @@ test('the harness built the player picker and the API', () => {
     assert.ok(playerDiff, 'player difficulty select exists');
 });
 
+test('window.lyricsKaraoke exposes the overdrive API', () => {
+    assert.equal(typeof api.getOverdrive, 'function');
+    assert.equal(typeof api.setMicHitThreshold, 'function');
+    assert.equal(typeof api.micHit.createDetector, 'function');
+    assert.equal(api.getOverdrive().fill, 0);
+    assert.equal(api.setMicHitThreshold(-21), true);
+    assert.equal(api.getMicHitThreshold(), -21);
+    assert.equal(api.setMicHitThreshold(null), true);
+    assert.equal(api.getMicHitThreshold(), -30);
+});
+
 test('an override equal to the saved difficulty still locks both pickers; null unlocks', () => {
     localStorage.setItem('lyrics_karaoke.difficulty', 'medium');
     assert.equal(api.getDifficulty(), 'medium');

@@ -227,3 +227,32 @@ test('earnsOverdrive follows RATINGS order', () => {
     assert.equal(earnsOverdrive('nope'), false);
     assert.equal(earnsOverdrive(undefined), false);
 });
+
+test('phrases in overdrive score double, totals keep the streak multiplier', () => {
+    const s = song([[60, 62], [60, 62, 64, 65]]);
+    assert.equal(s.phrases[0].end, 2);
+    assert.equal(s.phrases[1].end, 8);
+    const sc = createScorer({ ...s, difficulty: 'medium', isOverdriveAt: (t) => t > 5 });
+    sing(sc, s, 0, 0);
+    const ev0 = sc.advanceTo(endOf(s, 0));
+    sing(sc, s, 1, 0);
+    const ev1 = sc.advanceTo(endOf(s, 1));
+    assert.equal(ev0.length, 1);
+    assert.equal(ev1.length, 1);
+    assert.equal(ev0[0].overdrive, false);
+    assert.equal(ev0[0].points, 1000);
+    assert.equal(ev1[0].overdrive, true);
+    assert.equal(ev1[0].points, 1000 * ev1[0].multiplierBefore * 2);
+    assert.equal(sc.snapshot().score, ev0[0].points + ev1[0].points);
+    assert.ok(sc.snapshot().multiplier <= 4);
+    assert.equal(sc.snapshot().multiplier, 3);
+});
+
+test('without isOverdriveAt no phrase is in overdrive', () => {
+    const s = song([[60]]);
+    const sc = createScorer({ ...s, difficulty: 'medium' });
+    sing(sc, s, 0, 0);
+    const ev = sc.advanceTo(endOf(s, 0));
+    assert.equal(ev[0].overdrive, false);
+    assert.equal(ev[0].points, 1000);
+});

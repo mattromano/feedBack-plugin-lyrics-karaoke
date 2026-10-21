@@ -33,10 +33,15 @@ object is missing when the plugin is disabled or hasn't loaded yet.
 | `setScoreHudHidden(hidden)` | `boolean` | Hides karaoke's whole scoring HUD on the strip: the score / multiplier / stars pill and any later scoring display, such as an overdrive meter. Phrase ratings and mic warnings stay. A non-boolean returns `false`. |
 | `isScoreHudHidden()` | `boolean` | Whether the scoring HUD is hidden. |
 | `getScore()` | `object \| null` | `{ score, multiplier, streak, stars, ratedCount }`, or `null` with no scorer. |
+| `getOverdrive()` | `object` | The vocal overdrive meter now: `{ fill, active, ready }`. `fill` runs 0 to 1 (a full bar); `ready` means not active and at least half full. `{ fill: 0, active: false, ready: false }` with no scorer. |
+| `setMicHitThreshold(db \| null)` | `boolean` | Session threshold (dBFS) for the mic hit that deploys overdrive. Rounded to a whole dB and clamped to −48 … −12; it applies to the live mic at once. `null` clears it back to the default (−30). Anything else returns `false`. |
+| `getMicHitThreshold()` | `number` | The mic-hit threshold in effect. |
+| `micHit` | `object` | The mic-hit rule, shared so a host's sensitivity check matches what fires in the song: `{ riseDb: 25, defaultDb: -30, minDb: -48, maxDb: -12, createDetector({ thresholdDb }) }`. A detector's `push(db, t)` returns `true` on a hit: the frame level is at or above the threshold, at least `riseDb` above the previous frame, and at least 0.3 s after the last hit (the first frame never hits). It only reads numbers; it never touches audio. Also `setThreshold(db)`, `threshold()` and `reset()`. |
 
-**Overrides are not saved.** `setDifficulty`, `setHearMyself` and `setScoreHudHidden` last
-for the session only and never change the user's saved settings. Pass `null` to
-`setDifficulty` or `setHearMyself` to clear an override back to karaoke's own value.
+**Overrides are not saved.** `setDifficulty`, `setHearMyself`, `setScoreHudHidden` and
+`setMicHitThreshold` last for the session only and never change the user's saved settings.
+Pass `null` to `setDifficulty`, `setHearMyself` or `setMicHitThreshold` to clear an override
+back to karaoke's own value.
 
 ### Events
 
@@ -44,10 +49,22 @@ Karaoke emits these on core's event bus (`window.feedBack.on(name, handler)`; th
 is the event's `detail`):
 
 - **`karaoke:phrase`**, once per rated phrase, in order:
-  `{ phraseIndex, rating, accuracy, points, multiplierBefore, score, multiplier, streak, stars, ratedCount }`.
-  The first five fields describe the phrase; any further field the scorer adds to a phrase
+  `{ phraseIndex, rating, accuracy, points, multiplierBefore, overdrive, score, multiplier, streak, stars, ratedCount }`.
+  The first six fields describe the phrase; any further field the scorer adds to a phrase
   passes through too. The last five are the running totals as of the end of the frame that
   rated it: when one frame rates several phrases, every one of those events carries the same
   totals, after all of them. Treat the totals in each `karaoke:phrase` as authoritative.
 - **`karaoke:reset`**, a totals resync (new song, difficulty change, seek): the same
   totals as `getScore()`, or `null` with no scorer.
+
+Vocal overdrive (Rock Band style, numbers from YARG; see `NOTICE.md`): each phrase rated
+Strong or better earns a quarter bar; at half a bar or more a mic hit (a clap or shout into
+the mic) deploys it, at any time while the song plays; a full bar lasts 8 measures. Phrase
+events carry `overdrive`; points double while overdrive is active; `multiplier` stays the
+streak multiplier. A backward seek empties the bar; a forward seek keeps it.
+
+- **`karaoke:od-gain`** `{ fill }`: a phrase earned overdrive.
+- **`karaoke:od-ready`** `{ fill }`: that gain made the bar ready to deploy.
+- **`karaoke:od-activate`** `{ fill, t }`: a mic hit deployed overdrive at song time `t`.
+- **`karaoke:od-end`** `{ t }`: the bar ran out.
+- **`karaoke:mic-hit`** `{ t, db }`: the mic-hit detector fired (whether or not it deployed).

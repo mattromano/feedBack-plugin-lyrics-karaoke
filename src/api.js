@@ -4,9 +4,30 @@
  * DOM, no `window`, no scoring maths (events forward the scorer verbatim).
  */
 
+import { DEFAULT_MIC_HIT_DB, MIC_HIT_MIN_DB, MIC_HIT_MAX_DB, createMicHitDetector } from './mic-hit.js';
+import { MIC_HIT_RISE_DB } from './yarg-overdrive.js';
+
 export const API_VERSION = 1;
 export const PHRASE_EVENT = 'karaoke:phrase';
 export const RESET_EVENT = 'karaoke:reset';
+export const OD_EVENTS = Object.freeze({
+    gain: 'karaoke:od-gain',
+    ready: 'karaoke:od-ready',
+    activate: 'karaoke:od-activate',
+    end: 'karaoke:od-end',
+    micHit: 'karaoke:mic-hit',
+});
+
+const NO_OVERDRIVE = Object.freeze({ fill: 0, active: false, ready: false });
+
+// The mic-hit rule, shared so a host's sensitivity check matches what fires in the song.
+const MIC_HIT = Object.freeze({
+    riseDb: MIC_HIT_RISE_DB,
+    defaultDb: DEFAULT_MIC_HIT_DB,
+    minDb: MIC_HIT_MIN_DB,
+    maxDb: MIC_HIT_MAX_DB,
+    createDetector: (opts) => createMicHitDetector(opts),
+});
 
 /** Overlay placement: fill a host's slot, or karaoke's own ribbon in #player. */
 export function stripHostStyle(hosted) {
@@ -76,5 +97,13 @@ export function createKaraokeApi(deps) {
         setScoreHudHidden: (hidden) => overrides.setScoreHudHidden(hidden),
         isScoreHudHidden: () => overrides.scoreHudHidden(),
         getScore: () => deps.getSnapshot(),
+        getOverdrive: () => (typeof deps.getOverdrive === 'function' ? deps.getOverdrive() : { ...NO_OVERDRIVE }),
+        setMicHitThreshold(db) {
+            if (!overrides.setMicHitDb(db)) return false;
+            if (typeof deps.applyMicHitThreshold === 'function') deps.applyMicHitThreshold();
+            return true;
+        },
+        getMicHitThreshold: () => overrides.micHitDb() ?? DEFAULT_MIC_HIT_DB,
+        micHit: MIC_HIT,
     });
 }

@@ -3,6 +3,12 @@
 ## [Unreleased]
 
 ### Added
+- Vocal overdrive (KRB-8, YARG numbers; `src/yarg-overdrive.js` is LGPL-3.0, see NOTICE.md):
+  phrases rated Strong or better earn a quarter bar, a clap or shout into the mic deploys it
+  at half a bar or more, and phrase points double while it lasts (8 measures for a full bar).
+  A small blue meter under the score pill and an "Overdrive!" flash show it. Plugins get
+  `getOverdrive()`, `setMicHitThreshold()`, the shared `micHit` detector and `karaoke:od-*` /
+  `karaoke:mic-hit` events.
 - `window.lyricsKaraoke` lets other plugins (Build-a-Band) mount the karaoke strip in their
   own layout, turn karaoke and the mic on, set a session difficulty and hear-myself that
   are never saved, hide the score pill, and follow scoring through `karaoke:phrase` and
