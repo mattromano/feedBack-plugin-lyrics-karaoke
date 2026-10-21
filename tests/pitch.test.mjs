@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     DIFFICULTIES, DEFAULT_DIFFICULTY, pitchClassCents, sampleCredit,
-    freqToMidi, midiToName, yinDetect,
+    freqToMidi, midiToName, yinDetect, foldToTarget, monitorGainFor, isHowling,
 } from '../src/pitch.js';
 
 const close = (a, b, eps = 1e-9) => assert.ok(Math.abs(a - b) <= eps, `${a} !≈ ${b}`);
@@ -41,4 +41,41 @@ test('yinDetect finds a 220 Hz sine', () => {
 test('note names and frequency conversion', () => {
     assert.equal(midiToName(69), 'A4');
     close(freqToMidi(440), 69);
+});
+
+test('foldToTarget draws your pitch in the octave nearest the target note', () => {
+    close(foldToTarget(48, 60), 60);        // an octave low lines up with the bar
+    close(foldToTarget(73, 60), 61);        // an octave + semitone high → a semitone sharp
+    close(foldToTarget(65.4, 60), 65.4);    // within ±6 semitones: unchanged
+    close(foldToTarget(53.5, 60), 65.5);    // −6.5 st folds up to +5.5 (nearest octave)
+    assert.equal(foldToTarget(55, null), 55); // no target: raw pitch
+});
+
+test('monitorGainFor boosts a headset mic but caps at +18 dB: 0 = off, 50% = +12 dB, 100% = +18 dB', () => {
+    // +30 dB at 100% produced a measured feedback howl through laptop speakers.
+    assert.equal(monitorGainFor(0), 0);
+    close(20 * Math.log10(monitorGainFor(0.5)), 12, 1e-9);
+    close(20 * Math.log10(monitorGainFor(1)), 18, 1e-9);
+    close(20 * Math.log10(monitorGainFor(0.25)), 9, 1e-9);
+});
+
+test('isHowling spots a feedback tone: one pitch held within a few cents for ~1 s', () => {
+    // Measured howl: midi 80.4 for 10+ s. Samples every ~46 ms.
+    const howl = Array.from({ length: 24 }, (_, i) => ({ t: i * 0.046, midi: 80.4 + (i % 2) * 0.03 }));
+    assert.equal(isHowling(howl, 1.1), true);
+});
+
+test('isHowling ignores singing: held notes drift and phrases move', () => {
+    // A held sung note wobbles (vibrato ~±30 cents) — not a howl.
+    const held = Array.from({ length: 24 }, (_, i) => ({ t: i * 0.046, midi: 64 + 0.3 * Math.sin(i / 2) }));
+    assert.equal(isHowling(held, 1.1), false);
+    // A melody changes pitch.
+    const melody = Array.from({ length: 24 }, (_, i) => ({ t: i * 0.046, midi: 60 + Math.floor(i / 6) * 2 }));
+    assert.equal(isHowling(melody, 1.1), false);
+    // Too short a window of data is never a howl.
+    assert.equal(isHowling(Array.from({ length: 5 }, (_, i) => ({ t: i * 0.046, midi: 70 })), 1.1), false);
+    // A gap breaks the run.
+    const gappy = [...Array.from({ length: 12 }, (_, i) => ({ t: i * 0.046, midi: 70 })),
+                   ...Array.from({ length: 12 }, (_, i) => ({ t: 2 + i * 0.046, midi: 70 }))];
+    assert.equal(isHowling(gappy, 2.6), false);
 });

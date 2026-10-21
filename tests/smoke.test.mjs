@@ -15,3 +15,8 @@ test('src/main.js parses as a module', () => {
     const r = spawnSync(process.execPath, ['--check', path.join(root, 'src', 'main.js')], { encoding: 'utf8' });
     assert.equal(r.status, 0, r.stderr);
 });
+
+test('settings live in the Microphone & Detection tab', () => {
+    const manifest = JSON.parse(readFileSync(path.join(root, 'plugin.json'), 'utf8'));
+    assert.equal(manifest.settings.category, 'mic');
+});

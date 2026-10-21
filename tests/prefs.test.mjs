@@ -2,7 +2,8 @@ import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     getDifficulty, setDifficulty, getDeviceId, setDeviceId, getLatencyMs, setLatencyMs,
-    micConstraints, isDeviceMissingError, listInputDevices, micSongTime, savedDeviceLabel,
+    micConstraints, isDeviceMissingError, listInputDevices, micSongTime, savedDeviceLabel, micWarnings, buildMicOptions, micStartError, SHOW_MIC_NAMES,
+    getMonitorVolume, setMonitorVolume, monitorSinkId,
 } from '../src/prefs.js';
 
 function mapStorage() {
@@ -72,6 +73,9 @@ test('a throwing localStorage returns defaults without throwing', () => {
 test('micConstraints only pins a device when one is chosen', () => {
     const def = micConstraints('');
     assert.equal('deviceId' in def.audio, false);
+    // No echo cancellation: with the voice monitored through speakers it treats
+    // the singer's own voice as echo and scrubs it (measured: ~4% of frames still
+    // pitched). Feedback is handled by the monitor cap + howl guard instead.
     assert.equal(def.audio.echoCancellation, false);
     assert.equal(def.audio.noiseSuppression, false);
     assert.equal(def.audio.autoGainControl, false);
@@ -119,4 +123,92 @@ test('savedDeviceLabel only calls a saved mic "not connected" when ids are visib
     // Before mic permission Chromium returns empty ids — can't tell, don't claim it's unplugged.
     assert.equal(savedDeviceLabel([{ deviceId: '', label: 'Microphone 1' }], 'jabra'), 'Saved microphone');
     assert.equal(savedDeviceLabel(named, ''), null);
+});
+
+test('micWarnings flags the built-in mic and speaker output', () => {
+    const speakers = [{ kind: 'audiooutput', deviceId: 'default', label: 'Default - MacBook Pro Speakers' }];
+    const headset = [{ kind: 'audiooutput', deviceId: 'default', label: 'Default - Jabra EVOLVE 20' }];
+    assert.deepEqual(micWarnings('MacBook Pro Microphone', speakers), [
+        'Using the built-in mic — pick your headset in Settings → Lyrics Karaoke.',
+        'The song is playing through MacBook Pro Speakers — the mic will hear it. Use headphones.',
+    ]);
+    assert.deepEqual(micWarnings('Jabra EVOLVE 20', headset), []);
+    // A close-talk headset mic singing over speakers is the intended setup
+    // (your voice plays through the speakers too) — no speaker warning then.
+    assert.deepEqual(micWarnings('Jabra EVOLVE 20', speakers), []);
+    assert.deepEqual(micWarnings('Default - MacBook Pro Microphone (Built-in)', headset),
+        ['Using the built-in mic — pick your headset in Settings → Lyrics Karaoke.']);
+    // Unknown output (no labels before permission) → no speaker warning.
+    assert.deepEqual(micWarnings('Jabra EVOLVE 20', [{ kind: 'audiooutput', deviceId: 'default', label: '' }]), []);
+    assert.deepEqual(micWarnings('', []), []);
+});
+
+test('buildMicOptions starts with a choose prompt (never a system default) and selects the saved mic', () => {
+    const devices = [
+        { deviceId: 'default', label: 'Default - MacBook Pro Microphone' },
+        { deviceId: 'mbp', label: 'MacBook Pro Microphone' },
+        { deviceId: 'jabra', label: 'Jabra EVOLVE 20' },
+    ];
+    assert.deepEqual(buildMicOptions(devices, 'jabra'), [
+        { value: '', label: 'Choose a microphone…', selected: false },
+        { value: 'mbp', label: 'MacBook Pro Microphone', selected: false },
+        { value: 'jabra', label: 'Jabra EVOLVE 20', selected: true },
+    ]);
+    // Nothing saved → system default selected; unnamed devices (no permission yet) keep a plain label.
+    assert.deepEqual(buildMicOptions([{ deviceId: '', label: 'Microphone 1' }], ''), [
+        { value: '', label: 'Choose a microphone…', selected: true },
+        { value: SHOW_MIC_NAMES, label: 'Show microphone names…', selected: false },
+    ]);
+    // Saved but unplugged device stays selectable.
+    assert.deepEqual(buildMicOptions(devices.slice(0, 2), 'jabra').at(-1),
+        { value: 'jabra', label: 'Saved microphone (not connected)', selected: true });
+});
+
+test('micStartError refuses to open any mic until one is chosen, and never substitutes another', () => {
+    const named = [{ deviceId: 'mbp', label: 'MacBook Pro Microphone' }, { deviceId: 'jabra', label: 'Jabra EVOLVE 20' }];
+    assert.equal(micStartError('', named), 'Pick a microphone first.');
+    assert.equal(micStartError('jabra', named), null);
+    assert.equal(micStartError('gone', named), "Your chosen microphone isn't connected — plug it in or pick another.");
+    // Before mic permission ids are hidden: can't tell, so let getUserMedia decide.
+    assert.equal(micStartError('jabra', [{ deviceId: '', label: 'Microphone 1' }]), null);
+});
+
+test('monitor volume persists, clamps to 0–1 in 5% steps, defaults to 50%', () => {
+    assert.equal(getMonitorVolume(), 0.5);
+    setMonitorVolume(0.83);
+    assert.equal(getMonitorVolume(), 0.85);
+    setMonitorVolume(7);
+    assert.equal(getMonitorVolume(), 1);
+    setMonitorVolume(-1);
+    assert.equal(getMonitorVolume(), 0);
+    globalThis.localStorage.setItem('lyrics_karaoke.monitorVolume', 'loud');
+    assert.equal(getMonitorVolume(), 0.5);
+});
+
+test('monitorSinkId follows the device playing the game audio', () => {
+    const outs = [
+        { kind: 'audiooutput', deviceId: 'default', label: 'Default - MacBook Pro Speakers' },
+        { kind: 'audiooutput', deviceId: 'spk', label: 'MacBook Pro Speakers' },
+        { kind: 'audiooutput', deviceId: 'jab', label: 'Jabra EVOLVE 20' },
+        { kind: 'audioinput', deviceId: 'jabin', label: 'Jabra EVOLVE 20' },
+    ];
+    // Browser playback (no native engine): songs use the OS default output.
+    assert.equal(monitorSinkId(outs, { juceMode: false, engineOutput: 'Jabra EVOLVE 20' }), '');
+    // Native engine playing: match its output device by name (outputs only).
+    assert.equal(monitorSinkId(outs, { juceMode: true, engineOutput: 'Jabra EVOLVE 20' }), 'jab');
+    assert.equal(monitorSinkId(outs, { juceMode: true, engineOutput: 'MacBook Pro Speakers' }), 'spk');
+    // Engine on the OS default, or a name we can't find: OS default.
+    assert.equal(monitorSinkId(outs, { juceMode: true, engineOutput: '' }), '');
+    assert.equal(monitorSinkId(outs, { juceMode: true, engineOutput: 'Gone Device' }), '');
+});
+
+test('monitorSinkId matches Chromium labels that carry a (vendor:product) or (Built-in) suffix', () => {
+    // Real labels from the macOS desktop app.
+    const outs = [
+        { kind: 'audiooutput', deviceId: 'default', label: 'Default - MacBook Pro Speakers (Built-in)' },
+        { kind: 'audiooutput', deviceId: '04b6c2d5', label: 'Jabra EVOLVE 20 (0b0e:0301)' },
+        { kind: 'audiooutput', deviceId: '023448c6', label: 'MacBook Pro Speakers (Built-in)' },
+    ];
+    assert.equal(monitorSinkId(outs, { juceMode: true, engineOutput: 'Jabra EVOLVE 20' }), '04b6c2d5');
+    assert.equal(monitorSinkId(outs, { juceMode: true, engineOutput: 'MacBook Pro Speakers' }), '023448c6');
 });
