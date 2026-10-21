@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createScorer, rateAccuracy, starsFor, RATINGS } from '../src/scoring.js';
+import { createScorer, rateAccuracy, starsFor, earnsOverdrive, RATINGS } from '../src/scoring.js';
 import { buildPhrases } from '../src/phrases.js';
 
 // One phrase per entry of `phraseNotes`; each note is 1 s long, phrases are
@@ -217,4 +217,13 @@ test('seek() backward starts a new pass; seek() forward skips', () => {
     sc.seek(s.phrases[2].start + 0.5);   // forward into the middle of phrase 2
     assert.deepEqual(sc.advanceTo(endOf(s, 2)), []);
     assert.equal(sc.snapshot().ratedCount, 1);
+});
+
+test('earnsOverdrive follows RATINGS order', () => {
+    assert.equal(earnsOverdrive('Awesome'), true);
+    assert.equal(earnsOverdrive('Strong'), true);
+    assert.equal(earnsOverdrive('Good'), false);
+    assert.equal(earnsOverdrive('Awful'), false);
+    assert.equal(earnsOverdrive('nope'), false);
+    assert.equal(earnsOverdrive(undefined), false);
 });

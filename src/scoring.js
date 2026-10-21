@@ -26,6 +26,12 @@ const JUMP_S = 1.0;
 const MAX_MULTIPLIER = 4;
 const POINTS_PER_PHRASE = 1000;
 
+/** Overdrive is earned by a phrase rated 'Strong' or better (KRB-8). */
+export function earnsOverdrive(rating) {
+    const i = RATINGS.indexOf(rating);
+    return i >= 0 && i <= RATINGS.indexOf('Strong');
+}
+
 export function rateAccuracy(acc) {
     for (let i = 0; i < RATINGS.length; i++) {
         if (acc >= RATING_FLOORS[i]) return RATINGS[i];
