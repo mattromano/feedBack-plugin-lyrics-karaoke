@@ -21,6 +21,7 @@ function setup({ saved = 'medium' } = {}) {
         stopMic: () => { log.push(['stopMic']); state.mic = 'off'; },
         getMicState: () => state.mic,
         onDifficultyChanged: () => { log.push(['onDifficultyChanged']); },
+        onDifficultyOverrideSet: () => { log.push(['onDifficultyOverrideSet']); },
         applyHearMyself: () => { log.push(['applyHearMyself']); },
         getSnapshot: () => ({ ...SNAP }),
     };
@@ -102,6 +103,18 @@ test('setDifficulty re-scores only when the effective difficulty changes', () =>
     assert.equal(api.setDifficulty(null), true);
     assert.equal(count(log, 'onDifficultyChanged'), 2);
     assert.equal(api.getDifficulty(), 'medium');
+});
+
+test('setDifficulty refreshes the override lock on every accepted call', () => {
+    const { api, log } = setup({ saved: 'medium' });
+    assert.equal(api.setDifficulty('medium'), true);
+    assert.equal(count(log, 'onDifficultyOverrideSet'), 1);
+    assert.equal(count(log, 'onDifficultyChanged'), 0);
+    assert.equal(api.setDifficulty('nope'), false);
+    assert.equal(count(log, 'onDifficultyOverrideSet'), 1);
+    assert.equal(api.setDifficulty(null), true);
+    assert.equal(count(log, 'onDifficultyOverrideSet'), 2);
+    assert.equal(count(log, 'onDifficultyChanged'), 0);
 });
 
 test('setHearMyself applies only on a change', () => {

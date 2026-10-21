@@ -355,7 +355,7 @@ import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './ap
             // Fire-and-forget; refreshMicUi reflects the requesting/
             // listening/error transitions as the promise progresses.
             if (micWantOnForSong && status && status.has_pitch && songHasMidi() && micState === 'off') {
-                startMic();
+                startMic({ persistFlag: micPersist });
             }
         } else {
             hideOverlay();
@@ -889,6 +889,10 @@ import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './ap
     // resetForNewSong clears it). The persisted localStorage flag is
     // separate and serves a future "remember on reload" surface.
     let micWantOnForSong = false;
+    // Whether the latest mic start may write the saved micFeedback flag.
+    // Starts through window.lyricsKaraoke never do (the band never writes
+    // karaoke's saved prefs); restarts of that mic follow the same rule.
+    let micPersist = true;
 
     // Per-song bookkeeping for the live overlay.
     const userPitchSamples = [];      // ring of {t, midi, confidence}
@@ -991,8 +995,10 @@ import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './ap
         diag.howlDucks += 1;
     }
 
-    async function startMic() {
+    async function startMic(opts) {
         if (micState === 'listening' || micState === 'requesting') return;
+        const persistFlag = !(opts && opts.persistFlag === false);
+        micPersist = persistFlag;
         // Only ever open the mic the user picked — no system-default guess.
         const gate = micStartError(getDeviceId(), []);
         if (gate) {
@@ -1139,7 +1145,9 @@ import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './ap
 
             micState = 'listening';
             micWantOnForSong = true;
-            try { localStorage.setItem(_LK_STORAGE_KEY, '1'); } catch (_) { /* noop */ }
+            if (persistFlag) {
+                try { localStorage.setItem(_LK_STORAGE_KEY, '1'); } catch (_) { /* noop */ }
+            }
             refreshMicUi();
         } catch (e) {
             console.warn('lyrics_karaoke mic start failed', e);
@@ -1160,7 +1168,7 @@ import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './ap
             // current song (in-memory intent). The user re-clicks 🎤
             // to retry; a successful start re-sets both flags.
             micWantOnForSong = false;
-            stopMic({ keepFlag: false });
+            stopMic({ keepFlag: !persistFlag });
             // stopMic resets to 'off'; re-flag as 'error' so the pill/title
             // surface why the start failed.
             micState = 'error';
@@ -1294,7 +1302,7 @@ import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './ap
             diffSelect.appendChild(opt);
         }
         diffSelect.value = overrides.difficulty();
-        refreshDiffSelectLock();
+        refreshDifficultyLock();
         diffSelect.addEventListener('change', () => {
             setDifficulty(diffSelect.value);
             onDifficultyChanged();
@@ -1454,6 +1462,7 @@ import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './ap
         // opt-in on song A doesn't auto-prompt on song B.
         if (micState !== 'off') stopMic({ keepFlag: true });
         micWantOnForSong = false;
+        micPersist = true;
         resetUserResults();
         refreshButtonState();
     }
@@ -2005,10 +2014,11 @@ import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './ap
         },
         setKaraokeMode: apiSetKaraokeMode,
         isKaraokeMode: () => karaokeMode,
-        startMic,
+        startMic: () => startMic({ persistFlag: false }),
         stopMic: () => { if (micState !== 'off') { stopMic({ keepFlag: true }); resetUserResults(); } },
         getMicState: () => micState,
         onDifficultyChanged,
+        onDifficultyOverrideSet: refreshDifficultyLock,
         applyHearMyself,
         getSnapshot: () => (scorer ? scorer.snapshot() : null),
     });
@@ -2022,7 +2032,9 @@ import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './ap
         }
         const filename = currentSong && currentSong.filename;
         if (!filename) return false;
-        try { await songLoad; } catch (_) { /* its own error path */ }
+        if (songLoad && songLoadFor === filename) {
+            try { await songLoad; } catch (_) { /* its own error path */ }
+        }
         if (!currentSong || currentSong.filename !== filename) return false;
         if (!status || !status.has_pitch) return false;
         if (!pitchData) {
@@ -2102,7 +2114,7 @@ import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './ap
         // Switch the live mic straight away rather than on the next start.
         if (micState === 'listening' || micState === 'error') {
             stopMic({ keepFlag: true });
-            await startMic();
+            await startMic({ persistFlag: micPersist });
         }
     }
 
@@ -2117,7 +2129,8 @@ import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './ap
             opt.textContent = d.label;
             diffSel.appendChild(opt);
         }
-        diffSel.value = getDifficulty();
+        diffSel.value = overrides.difficulty();
+        refreshDifficultyLock();
         diffSel.addEventListener('change', () => { setDifficulty(diffSel.value); onDifficultyChanged(); });
 
         const devSel = document.getElementById('lk-set-device');
@@ -2157,20 +2170,27 @@ import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './ap
     function onDifficultyChanged() {
         const d = overrides.difficulty();
         if (diffSelect && diffSelect.value !== d) diffSelect.value = d;
-        refreshDiffSelectLock();
         const setSel = document.getElementById('lk-set-difficulty');
         if (setSel && setSel.value !== d) setSel.value = d;
+        refreshDifficultyLock();
         rebuildScorer();
         resetUserResults();
     }
 
-    // While a host's difficulty override is active the player's picker
-    // shows it and can't change it.
-    function refreshDiffSelectLock() {
-        if (!diffSelect) return;
+    // While a host's difficulty override is active, the player's picker and
+    // the settings page's show it and can't change it. Runs on every
+    // override set or clear, even when the effective difficulty is unchanged.
+    function refreshDifficultyLock() {
         const locked = overrides.hasDifficulty();
-        diffSelect.disabled = locked;
-        diffSelect.title = locked ? 'Set on the band screen' : 'Vocal difficulty';
+        const d = overrides.difficulty();
+        const lock = (sel, title) => {
+            if (!sel) return;
+            if (sel.value !== d) sel.value = d;
+            sel.disabled = locked;
+            sel.title = locked ? 'Set on the band screen' : title;
+        };
+        lock(diffSelect, 'Vocal difficulty');
+        lock(document.getElementById('lk-set-difficulty'), '');
     }
 
     // ══════════════════════════════════════════════════════════════════

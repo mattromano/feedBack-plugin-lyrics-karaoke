@@ -62,6 +62,8 @@ export function createKaraokeApi(deps) {
             const before = overrides.difficulty();
             if (!overrides.setDifficulty(id)) return false;
             if (overrides.difficulty() !== before) deps.onDifficultyChanged();
+            // The lock on karaoke's own pickers follows set/clear, not the value.
+            deps.onDifficultyOverrideSet();
             return true;
         },
         getDifficulty: () => overrides.difficulty(),
