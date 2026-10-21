@@ -29,6 +29,14 @@ function inPhrase(phrases, t) {
     return false;
 }
 
+// Empty a meter that is being reset or replaced. Returns whether that ends
+// an overdrive (the meter was active, or the caller last saw it active), so
+// the caller emits karaoke:od-end exactly once.
+export function retireOverdrive(od, wasActive) {
+    const ended = od ? od.reset() : false;
+    return ended || !!wasActive;
+}
+
 export function createVocalOverdrive({ clock, phrases } = {}) {
     const phr = Array.isArray(phrases) ? phrases : [];
     let fill, active, lastT;

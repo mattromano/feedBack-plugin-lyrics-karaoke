@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createVocalOverdrive, MIC_HIT_PHRASE_GUARD_S } from '../src/overdrive.js';
+import { createVocalOverdrive, MIC_HIT_PHRASE_GUARD_S, retireOverdrive } from '../src/overdrive.js';
 import { createMeasureClock } from '../src/measure.js';
 
 // Beats every 0.5 s with `measure` set on every 4th: 2 s measures.
@@ -170,4 +170,27 @@ test('isActiveAt answers an earlier time from the activation history', () => {
     assert.equal(od.stateAt(19).fill, 0);        // stateAt still treats it as the latest
     od.reset();
     assert.equal(od.isActiveAt(12), false);      // reset clears the history
+});
+
+// main.js's onDifficultyChanged: rebuildScorer retires the old meter, then
+// resetUserResults → resetOverdrive retires the new one. Both use this rule.
+test('a difficulty change while overdrive is active emits od-end once', () => {
+    const old = make();
+    for (const t of [1, 2]) old.phrase('Awesome', t);
+    assert.equal(old.micHit(3), true);
+    let ends = 0;
+    // rebuildScorer: the old meter is still active (odWasActive true).
+    if (retireOverdrive(old, true)) ends += 1;
+    assert.equal(old.isActiveAt(3), false, 'the old meter is emptied');
+    // resetOverdrive on the fresh meter, odWasActive cleared by the rebuild.
+    if (retireOverdrive(make(), false)) ends += 1;
+    assert.equal(ends, 1);
+    // Either signal alone counts: an active meter, or odWasActive.
+    const active = make();
+    for (const t of [1, 2]) active.phrase('Awesome', t);
+    active.micHit(3);
+    assert.equal(retireOverdrive(active, false), true);
+    assert.equal(retireOverdrive(make(), true), true);
+    assert.equal(retireOverdrive(null, false), false);
+    assert.equal(retireOverdrive(null, true), true);
 });

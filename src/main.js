@@ -31,7 +31,7 @@ import { createScorer } from './scoring.js';
 import { createSessionOverrides } from './overrides.js';
 import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT, OD_EVENTS } from './api.js';
 import { createMeasureClock } from './measure.js';
-import { createVocalOverdrive } from './overdrive.js';
+import { createVocalOverdrive, retireOverdrive } from './overdrive.js';
 import { createMicHitDetector, levelDb, DEFAULT_MIC_HIT_DB } from './mic-hit.js';
 
 (function () {
@@ -160,6 +160,8 @@ import { createMicHitDetector, levelDb, DEFAULT_MIC_HIT_DB } from './mic-hit.js'
 
     function rebuildScorer() {
         const tokens = (pitchData && Array.isArray(pitchData.tokens)) ? pitchData.tokens : null;
+        // Replacing an active meter ends its overdrive: say so, like resetOverdrive.
+        if (retireOverdrive(vocalOd, odWasActive)) busEmit(OD_EVENTS.end, { t: scoringTime(getNow()) });
         refreshOdClock();
         const phrases = tokens ? buildPhrases(tokens) : [];
         // The meter reads odClock through this indirection, so beats that
@@ -1040,8 +1042,7 @@ import { createMicHitDetector, levelDb, DEFAULT_MIC_HIT_DB } from './mic-hit.js'
     // A new scoring pass empties the overdrive bar (R5). The mic-hit
     // detector forgets its last hit too, so a rewind can't leave it refractory.
     function resetOverdrive() {
-        const ended = vocalOd ? vocalOd.reset() : false;
-        if (ended || odWasActive) busEmit(OD_EVENTS.end, { t: scoringTime(getNow()) });
+        if (retireOverdrive(vocalOd, odWasActive)) busEmit(OD_EVENTS.end, { t: scoringTime(getNow()) });
         micHitDetector.reset();
         micHitLastNow = null;
         odWasActive = false;
