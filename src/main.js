@@ -20,7 +20,7 @@
  * lyrics_sync directory remains as a redirect stub for users with
  * bookmarks pointing at it.
  */
-import { DIFFICULTIES, freqToMidi, midiToName, yinDetect, pitchClassCents, foldToTarget, monitorGainFor, isHowling } from './pitch.js';
+import { DIFFICULTIES, freqToMidi, midiToName, yinDetect, pitchClassCents, foldSticky, VOCAL_MIN_HZ, VOCAL_MAX_HZ, VOCAL_CONFIDENCE, monitorGainFor, isHowling } from './pitch.js';
 import {
     getDifficulty, setDifficulty, getDeviceId, setDeviceId, getLatencyMs, setLatencyMs,
     listInputDevices, micConstraints, isDeviceMissingError, micSongTime, savedDeviceLabel, micWarnings,
@@ -631,10 +631,13 @@ import { createScorer } from './scoring.js';
             ctx.lineWidth = 3 * dpr;
             ctx.lineCap = 'round';
             let prev = null;
+            let trailShift = null;
             for (const smp of userPitchSamples) {
                 if (smp.t < trailFrom || smp.t > now) { prev = null; continue; }
                 const target = targetAt(smp.t);
-                const shown = foldToTarget(smp.midi, target);
+                const folded = foldSticky(smp.midi, target, trailShift);
+                trailShift = folded.shift;
+                const shown = folded.shown;
                 const onPitch = target != null && Math.abs(pitchClassCents(smp.midi, target)) <= tolCents;
                 const pt = { x: xFor(smp.t), y: yClip(shown), t: smp.t };
                 if (prev && pt.t - prev.t < 0.15) {
@@ -662,7 +665,10 @@ import { createScorer } from './scoring.js';
             if (fresh && userPitchSamples.length) {
                 const last = userPitchSamples[userPitchSamples.length - 1];
                 const target = targetAt(now);
-                const shownNow = foldToTarget(last.midi, target);
+                // Sticky octave: a steady voice stays put as the target note moves.
+                const folded = foldSticky(last.midi, target, userDisplayShift);
+                userDisplayShift = folded.shift;
+                const shownNow = folded.shown;
                 if (userDisplayMidi == null || Math.abs(shownNow - userDisplayMidi) > 6) {
                     userDisplayMidi = shownNow;
                 } else {
@@ -699,6 +705,7 @@ import { createScorer } from './scoring.js';
                 // Discard the smoothed value so re-acquire snaps cleanly
                 // rather than drifting from the last fresh pitch.
                 userDisplayMidi = null;
+                userDisplayShift = null;
             }
             updateMicPill();
             drawHud(dpr, playheadX);
@@ -807,9 +814,9 @@ import { createScorer } from './scoring.js';
     // pattern arrives, factor into a shared module (tracked as issue #5).
     const _LK_YIN_FRAME_SIZE = 2048;
     const _LK_YIN_MIN_SAMPLES = 4096;
-    const _LK_YIN_MIN_HZ = 50;        // human vocal floor — drops sub-bass artefacts
-    const _LK_YIN_MAX_HZ = 1100;      // upper end of soprano range
-    const _LK_YIN_CONFIDENCE = 0.5;   // YIN clarity score; below = unvoiced
+    const _LK_YIN_MIN_HZ = VOCAL_MIN_HZ;      // singing range, see pitch.js
+    const _LK_YIN_MAX_HZ = VOCAL_MAX_HZ;
+    const _LK_YIN_CONFIDENCE = VOCAL_CONFIDENCE;
     const _LK_SAMPLE_FRESH_MS = 200;  // stale samples don't draw the user line
     const _LK_SAMPLE_RING_CAP = 256;  // ~12 s at 50 ms cadence
     const _LK_STORAGE_KEY = 'lyrics_karaoke.micFeedback';
@@ -860,6 +867,7 @@ import { createScorer } from './scoring.js';
     // Per-song bookkeeping for the live overlay.
     const userPitchSamples = [];      // ring of {t, midi, confidence}
     let userDisplayMidi = null;       // smoothed value used for the pitch line + pill
+    let userDisplayShift = null;      // the arrow's current octave shift (foldSticky)
     let userLastSampleWallAt = -Infinity; // wall-clock ms of latest sample (used for staleness)
 
     function _wallNow() {
@@ -892,6 +900,7 @@ import { createScorer } from './scoring.js';
         if (scorer) scorer.reset();
         lastRating = null;
         userDisplayMidi = null;
+        userDisplayShift = null;
         userLastSampleWallAt = -Infinity;
         // Also drop the transport-tracking cursor so the next frame
         // doesn't compare against a stale previous time.

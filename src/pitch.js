@@ -93,6 +93,32 @@ export function yinDetect(buffer, sampleRate, minFreqHz) {
     };
 }
 
+// Singing range for the mic detector. The floor sits above song bass leaking from speakers into
+// the mic (a real run read a clean ~62 Hz a tenth of the time with a 50 Hz floor) and below the
+// lowest sung notes (bass singers bottom out around E2, 82 Hz).
+export const VOCAL_MIN_HZ = 70;
+export const VOCAL_MAX_HZ = 1100;
+export const VOCAL_CONFIDENCE = 0.5;   // YIN clarity score; below = unvoiced
+
+// How far (semitones) a drawn pitch may sit from the target before it is refolded to the nearest
+// octave. Past the ±6 of plain folding, so a steady voice keeps its octave as the melody moves and a
+// voice hovering half an octave off doesn't flap between two octaves.
+export const FOLD_HYSTERESIS_ST = 9;
+
+/** Like foldToTarget, but keeps the previous octave shift (a multiple of 12, or null) while it still
+ *  lands within FOLD_HYSTERESIS_ST of the target. Returns {shown, shift}. */
+export function foldSticky(midi, targetMidi, prevShift) {
+    if (typeof targetMidi !== 'number') {
+        const shift = typeof prevShift === 'number' ? prevShift : 0;
+        return { shown: midi + shift, shift };
+    }
+    if (typeof prevShift === 'number' && Math.abs(midi + prevShift - targetMidi) <= FOLD_HYSTERESIS_ST) {
+        return { shown: midi + prevShift, shift: prevShift };
+    }
+    const shift = 12 * Math.round((targetMidi - midi) / 12);
+    return { shown: midi + shift, shift };
+}
+
 /** Your pitch moved into the octave nearest `targetMidi`, for drawing it
  *  against the chart's bars (scoring already ignores octave). */
 export function foldToTarget(midi, targetMidi) {
