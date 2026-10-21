@@ -135,3 +135,28 @@ def test_regenerate_backup_and_restore_bring_the_old_pitch_back(tmp_path):
     with zipfile.ZipFile(src) as zf:
         assert zf.read("vocal_pitch.json").decode() == OLD_PITCH
         assert yaml.safe_load(zf.read("manifest.yaml")) == manifest
+
+
+def test_write_also_lengthens_matching_lyrics(tmp_path):
+    src = make_sloppak(tmp_path / "song.sloppak")
+    bgp.write_pitch_into_sloppak(src, [{"t": 1.0, "d": 0.9, "midi": 60}, {"t": 1.5, "d": 0.5, "midi": 62}])
+    with zipfile.ZipFile(src) as zf:
+        lyr = json.loads(zf.read("lyrics.json"))
+        assert len(zf.namelist()) == len(set(zf.namelist())), "no duplicate entries"
+    assert [l["d"] for l in lyr] == [0.9, 0.5]
+    assert [l["t"] for l in lyr] == [1.0, 1.5]
+
+
+def test_restore_brings_back_the_original_lyrics(tmp_path):
+    (tmp_path / "dlc" / "sloppak").mkdir(parents=True)
+    src = make_sloppak(tmp_path / "dlc" / "sloppak" / "song.sloppak")
+    with zipfile.ZipFile(src) as zf:
+        original = zf.read("lyrics.json")
+    backup_root = tmp_path / "backup"
+    bgp.backup_manifest(src, tmp_path / "dlc", backup_root)
+    bgp.write_pitch_into_sloppak(src, [{"t": 1.0, "d": 0.9, "midi": 60}])
+
+    bgp.restore_sloppak(src, tmp_path / "dlc", backup_root)
+
+    with zipfile.ZipFile(src) as zf:
+        assert zf.read("lyrics.json") == original
