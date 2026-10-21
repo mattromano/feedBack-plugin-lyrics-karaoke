@@ -200,8 +200,8 @@ def _extract_pitch_per_syllable(vocals_path: Path, lyrics: list[dict]) -> list[d
 
     1. Scan once with a wide fmin/fmax (C2-C6) to discover the singer's
        actual pitch centre — pYIN's octave error rate goes down a lot
-       when the search range is narrowed to ~one octave around the
-       singer's median.
+       when the search range is narrowed around the singer's median
+       (an octave below, two above).
     2. Re-scan with the narrowed range and use voiced_prob to weight
        per-frame pitches rather than treating voiced_flag as a binary
        gate (recovers pitched-but-quiet tails of held notes).
@@ -259,10 +259,15 @@ def _extract_pitch_per_syllable(vocals_path: Path, lyrics: list[dict]) -> list[d
     if int(confident_mask.sum()) >= 32:
         midis_wide = 69 + 12 * np.log2(f0_wide[confident_mask] / 440.0)
         median_midi = float(np.median(midis_wide))
-        # Narrow ±12 semitones around the median, clamped to the wide
-        # range so an outlier-skewed median can't push us out of bounds.
+        # Narrow to 12 semitones below / 24 above the median, clamped to
+        # the wide range so an outlier-skewed median can't push us out of
+        # bounds. The room above matters: a note sung past the window's top
+        # can only be reported an octave low, and pYIN's octave errors on
+        # vocals are mostly low already. Against 40 Rock Band charts, +24
+        # beat +12 everywhere (right octave 79.4% -> 81.3%) with no song
+        # worse; widening below as well made things worse.
         narrow_fmin = max(wide_fmin, 440.0 * (2 ** ((median_midi - 12 - 69) / 12)))
-        narrow_fmax = min(wide_fmax, 440.0 * (2 ** ((median_midi + 12 - 69) / 12)))
+        narrow_fmax = min(wide_fmax, 440.0 * (2 ** ((median_midi + 24 - 69) / 12)))
         f0, f0_guess, voiced_prob = _run_pyin(narrow_fmin, narrow_fmax)
         if f0 is None or len(f0) == 0:
             f0, f0_guess, voiced_prob = f0_wide, guess_wide, prob_wide

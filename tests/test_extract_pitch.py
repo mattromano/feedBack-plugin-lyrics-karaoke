@@ -65,3 +65,15 @@ def test_short_quiet_syllable_gets_its_own_pitch(tmp_path):
     out = routes._extract_pitch_per_syllable(path, lyrics)
     assert out[1]["midi"] is not None
     assert _pc_semitones(out[1]["midi"], 62) <= 1, out
+
+
+def test_high_notes_above_the_singers_centre_keep_their_octave(tmp_path):
+    # A low verse (A2) and a chorus line 14 semitones up (B3). The second
+    # pYIN pass searches a window around the singer's median; when that window
+    # ended 12 semitones up, the chorus could only be reported an octave low.
+    verse = [(45, 0.5, 0.5)] * 8
+    chorus = [(59, 0.5, 0.5)] * 4
+    path, lyrics = _write_vocals(tmp_path, [(None, 0.3, 0), *verse, *chorus,
+                                            *verse, (None, 0.3, 0)])
+    out = routes._extract_pitch_per_syllable(path, lyrics)
+    assert [o["midi"] for o in out[8:12]] == [59] * 4, out[8:12]

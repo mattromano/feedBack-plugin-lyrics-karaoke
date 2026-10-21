@@ -37,6 +37,11 @@
   the syllable now takes pYIN's best-guess pitch instead of copying a neighbour's note.
   Against 40 Harmonix Rock Band vocal charts (6,671 notes) this lifts notes within a
   semitone of the chart from 74% to 86%, and exact notes from 60% to 69%.
+- Auto pitch on notes sung well above the singer's usual range (a chorus over a low
+  verse): the detector's second pass now searches two octaves above the singer's centre
+  instead of one, so those notes stop being reported an octave low. Against the same
+  charts, target bars in the right octave go from 79% to 81% and notes within a
+  semitone from 86% to 87%, with no song worse.
 
 ## [1.5.0] - 2026-10-16
 
