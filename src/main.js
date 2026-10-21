@@ -28,6 +28,8 @@ import {
 } from './prefs.js';
 import { buildPhrases } from './phrases.js';
 import { createScorer } from './scoring.js';
+import { createSessionOverrides } from './overrides.js';
+import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './api.js';
 
 (function () {
     'use strict';
@@ -46,10 +48,16 @@ import { createScorer } from './scoring.js';
     let savedShowLyrics = true;      // restore on toggle off
     let generating = false;          // suppress double-clicks during /generate
     let inflightFetch = 0;           // monotonic token; stale fetches drop their result
+    let songLoad = null;             // onSongLoaded's in-flight body, awaited by the API's setKaraokeMode
+    let songLoadFor = null;          // filename songLoad is loading
+    // Session overrides another plugin (Build-a-Band) sets through
+    // window.lyricsKaraoke. Never persisted; null clears.
+    const overrides = createSessionOverrides({ getSavedDifficulty: getDifficulty });
 
     // ── DOM refs ───────────────────────────────────────────────────────
     let toggleBtn = null;
     let overlayEl = null;            // wrapper div that hosts the canvas
+    let stripHost = null;            // element another plugin mounted the strip in (null = #player)
     let canvas = null;
     let ctx = null;
     let rafHandle = null;
@@ -66,7 +74,6 @@ import { createScorer } from './scoring.js';
     const TEXT_COLOR = '#f4f4ff';
     const TEXT_COLOR_PAST = 'rgba(160,170,200,0.9)';
     const MIN_PITCH_SPAN_SEMITONES = 7;  // never collapse the strip flatter than a 5th
-    const RIBBON_HEIGHT_PX = 140;
     const BAR_PAD_PX = 2;
     const BAR_RADIUS = 4;
 
@@ -143,7 +150,7 @@ import { createScorer } from './scoring.js';
     function rebuildScorer() {
         const tokens = (pitchData && Array.isArray(pitchData.tokens)) ? pitchData.tokens : null;
         scorer = tokens
-            ? createScorer({ tokens, phrases: buildPhrases(tokens), difficulty: getDifficulty() })
+            ? createScorer({ tokens, phrases: buildPhrases(tokens), difficulty: overrides.difficulty() })
             : null;
         lastRating = null;
     }
@@ -366,33 +373,44 @@ import { createScorer } from './scoring.js';
 
     // ── Overlay canvas lifecycle ───────────────────────────────────────
 
+    // The strip's host: a connected element another plugin mounted it in,
+    // else #player. A torn-down host never swallows solo karaoke.
+    function resolveHost() {
+        if (stripHost && stripHost.isConnected) return stripHost;
+        return document.getElementById('player');
+    }
+
+    // Put the overlay in `host`: filling it when hosted, else just below
+    // #player's HUD row (above highway, below HUD/controls).
+    function placeOverlay(host) {
+        Object.assign(overlayEl.style, stripHostStyle(host !== document.getElementById('player')));
+        if (overlayEl.parentNode !== host) host.appendChild(overlayEl);
+    }
+
     function showOverlay() {
-        const player = document.getElementById('player');
-        const highway = document.getElementById('highway');
-        if (!player || !highway) return;
+        const host = resolveHost();
+        if (!host) return;
+        if (host === document.getElementById('player') && !document.getElementById('highway')) return;
 
         if (!overlayEl) {
             overlayEl = document.createElement('div');
             overlayEl.id = 'lyrics-karaoke-overlay';
-            overlayEl.style.position = 'absolute';
-            overlayEl.style.left = '0';
-            overlayEl.style.right = '0';
-            overlayEl.style.top = '60px';   // sit just below the HUD row
-            overlayEl.style.height = `${RIBBON_HEIGHT_PX}px`;
-            overlayEl.style.pointerEvents = 'none';
-            overlayEl.style.zIndex = '5';   // above highway, below HUD/controls
 
             canvas = document.createElement('canvas');
             canvas.style.width = '100%';
             canvas.style.height = '100%';
             canvas.style.display = 'block';
             overlayEl.appendChild(canvas);
-            player.appendChild(overlayEl);
+            placeOverlay(host);
 
             ctx = canvas.getContext('2d');
             sizeCanvas();
         } else {
             overlayEl.style.display = '';
+            if (overlayEl.parentNode !== host) {
+                placeOverlay(host);
+                sizeCanvas();
+            }
         }
 
         if (!resizeObserver && typeof ResizeObserver !== 'undefined') {
@@ -586,7 +604,10 @@ import { createScorer } from './scoring.js';
         // so turning the mic off doesn't rate the rest of the song Awful.
         if (scorer && micState === 'listening') {
             const events = scorer.advanceTo(now - (micLatencyMs / 1000) * getPlaybackRate());
-            if (events.length) lastRating = { text: events[events.length - 1].rating, at: _wallNow() };
+            if (events.length) {
+                lastRating = { text: events[events.length - 1].rating, at: _wallNow() };
+                emitScoring(busEmit, events, scorer.snapshot());
+            }
         }
         const hasScored = !!scorer && scorer.snapshot().ratedCount > 0;
 
@@ -611,7 +632,7 @@ import { createScorer } from './scoring.js';
             // the octave nearest the target note (scoring ignores octave too),
             // as a trail over what you just sang plus an arrow at the playhead —
             // green inside the difficulty's tolerance, orange outside.
-            const tolCents = (DIFFICULTIES[getDifficulty()] || DIFFICULTIES.medium).toleranceCents;
+            const tolCents = (DIFFICULTIES[overrides.difficulty()] || DIFFICULTIES.medium).toleranceCents;
             const targetAt = (t) => {
                 let best = null;
                 for (const { tok, midi } of visible) {
@@ -738,30 +759,34 @@ import { createScorer } from './scoring.js';
     // plugins' panels sit over the top-right corner); the latest phrase
     // rating floats above the playhead and fades out.
     function drawHud(dpr, playheadX) {
-        const snap = scorer.snapshot();
         ctx.save();
         ctx.textBaseline = 'top';
         ctx.textAlign = 'left';
-        const parts = [
-            [snap.score.toLocaleString(), `bold ${Math.round(15 * dpr)}px sans-serif`, TEXT_COLOR],
-            [`×${snap.multiplier}`, `bold ${Math.round(13 * dpr)}px sans-serif`,
-                snap.multiplier > 1 ? BAR_COLOR_ACTIVE : TEXT_COLOR_PAST],
-            ['★'.repeat(snap.stars) + '☆'.repeat(5 - snap.stars), `${Math.round(13 * dpr)}px sans-serif`, BAR_COLOR_FILL],
-        ];
-        const gap = 10 * dpr;
-        const widths = parts.map(([text, font]) => { ctx.font = font; return ctx.measureText(text).width; });
-        const total = widths.reduce((a, b) => a + b, 0) + gap * (parts.length - 1);
-        const y = 8 * dpr;
-        // Backing pill keeps the HUD legible over high-pitched bars.
-        ctx.fillStyle = 'rgba(8, 8, 14, 0.85)';
-        roundFillRect(ctx, 8 * dpr, 4 * dpr, total + 12 * dpr, 22 * dpr, 8 * dpr);
-        let x = 14 * dpr;
-        parts.forEach(([text, font, color], i) => {
-            ctx.font = font;
-            ctx.fillStyle = color;
-            ctx.fillText(text, x, y);
-            x += widths[i] + gap;
-        });
+        // A host with its own score display (Build-a-Band) hides the pill;
+        // warnings and ratings keep their places.
+        if (!overrides.scoreHudHidden()) {
+            const snap = scorer.snapshot();
+            const parts = [
+                [snap.score.toLocaleString(), `bold ${Math.round(15 * dpr)}px sans-serif`, TEXT_COLOR],
+                [`×${snap.multiplier}`, `bold ${Math.round(13 * dpr)}px sans-serif`,
+                    snap.multiplier > 1 ? BAR_COLOR_ACTIVE : TEXT_COLOR_PAST],
+                ['★'.repeat(snap.stars) + '☆'.repeat(5 - snap.stars), `${Math.round(13 * dpr)}px sans-serif`, BAR_COLOR_FILL],
+            ];
+            const gap = 10 * dpr;
+            const widths = parts.map(([text, font]) => { ctx.font = font; return ctx.measureText(text).width; });
+            const total = widths.reduce((a, b) => a + b, 0) + gap * (parts.length - 1);
+            const y = 8 * dpr;
+            // Backing pill keeps the HUD legible over high-pitched bars.
+            ctx.fillStyle = 'rgba(8, 8, 14, 0.85)';
+            roundFillRect(ctx, 8 * dpr, 4 * dpr, total + 12 * dpr, 22 * dpr, 8 * dpr);
+            let x = 14 * dpr;
+            parts.forEach(([text, font, color], i) => {
+                ctx.font = font;
+                ctx.fillStyle = color;
+                ctx.fillText(text, x, y);
+                x += widths[i] + gap;
+            });
+        }
         // Mic setup problems (built-in mic, speakers) make scoring meaningless —
         // say so where the singer is looking.
         const howlNotice = _wallNow() < howlNoticeUntil
@@ -853,6 +878,7 @@ import { createScorer } from './scoring.js';
     let micSelect = null;                // in-player microphone <select>
     let monitorSlider = null;            // in-player voice-volume slider
     let monitorGain = null;              // GainNode: your voice → the game's output
+    let monitorLimiter = null;           // limiter after monitorGain, → destination
     let howlCooldownUntil = -Infinity;   // song time before which the howl guard won't act again
     let howlNoticeUntil = -Infinity;     // wall-clock ms until which the 'feedback' notice shows
     const howlSamples = [];              // every confident pitch (any range), for the howl guard
@@ -905,6 +931,15 @@ import { createScorer } from './scoring.js';
         // Also drop the transport-tracking cursor so the next frame
         // doesn't compare against a stale previous time.
         micLastCapturedAt = -Infinity;
+        busEmit(RESET_EVENT, scorer ? scorer.snapshot() : null);
+    }
+
+    // Core's event bus; a listener's error never breaks karaoke.
+    function busEmit(name, detail) {
+        try {
+            const bus = window.feedBack || window.slopsmith;
+            if (bus && typeof bus.emit === 'function') bus.emit(name, detail);
+        } catch (_) { /* noop */ }
     }
 
     function processYinFrame(buffer, sampleRate, capturedAt, sessionAtCapture) {
@@ -1090,20 +1125,8 @@ import { createScorer } from './scoring.js';
             micProcessor.connect(muteSink);
             muteSink.connect(micCtx.destination);
 
-            // Vocal monitor: your voice through the same device that plays the
-            // game's audio, at the user's volume. A hard limiter keeps a loud
-            // note (or the start of a feedback howl) from clipping harshly.
-            monitorGain = micCtx.createGain();
-            monitorGain.gain.value = monitorGainFor(getMonitorVolume());
-            const limiter = micCtx.createDynamicsCompressor();
-            limiter.threshold.value = -6;
-            limiter.knee.value = 0;
-            limiter.ratio.value = 20;
-            limiter.attack.value = 0.002;
-            limiter.release.value = 0.1;
-            micSourceNode.connect(monitorGain);
-            monitorGain.connect(limiter);
-            limiter.connect(micCtx.destination);
+            // Hear-myself off (a session override) builds no path to the speakers.
+            if (overrides.hearMyself()) connectMonitor();
             routeMonitorToGameOutput(micCtx, session);
 
             micTimer = setInterval(() => {
@@ -1145,6 +1168,43 @@ import { createScorer } from './scoring.js';
         }
     }
 
+    // Vocal monitor: your voice through the same device that plays the
+    // game's audio, at the user's volume. A hard limiter keeps a loud
+    // note (or the start of a feedback howl) from clipping harshly.
+    function connectMonitor() {
+        if (!micCtx || !micSourceNode || monitorGain) return;
+        monitorGain = micCtx.createGain();
+        monitorGain.gain.value = monitorGainFor(getMonitorVolume());
+        const limiter = micCtx.createDynamicsCompressor();
+        limiter.threshold.value = -6;
+        limiter.knee.value = 0;
+        limiter.ratio.value = 20;
+        limiter.attack.value = 0.002;
+        limiter.release.value = 0.1;
+        micSourceNode.connect(monitorGain);
+        monitorGain.connect(limiter);
+        limiter.connect(micCtx.destination);
+        monitorLimiter = limiter;
+    }
+
+    function disconnectMonitor() {
+        if (micSourceNode && monitorGain) {
+            try { micSourceNode.disconnect(monitorGain); } catch (_) { /* noop */ }
+        }
+        if (monitorGain) { try { monitorGain.disconnect(); } catch (_) { /* noop */ } }
+        if (monitorLimiter) { try { monitorLimiter.disconnect(); } catch (_) { /* noop */ } }
+        monitorGain = null;
+        monitorLimiter = null;
+    }
+
+    // Follow the hear-myself override while the mic is open.
+    function applyHearMyself() {
+        if (micState !== 'listening') return;
+        const on = overrides.hearMyself();
+        if (on && !monitorGain) connectMonitor();
+        else if (!on && monitorGain) disconnectMonitor();
+    }
+
     // Point the mic context at the device playing the game: the OS default
     // for browser playback, or the native engine's output when it plays the song.
     async function routeMonitorToGameOutput(ctxForMic, session) {
@@ -1166,6 +1226,7 @@ import { createScorer } from './scoring.js';
     function stopMic(opts) {
         const keepFlag = !!(opts && opts.keepFlag);
         monitorGain = null;   // closed with micCtx below
+        monitorLimiter = null;
         micDeviceLabel = '';
         micSetupWarnings = [];
         micSessionGen += 1;  // any in-flight YIN frame becomes stale
@@ -1232,7 +1293,8 @@ import { createScorer } from './scoring.js';
             opt.textContent = d.label;
             diffSelect.appendChild(opt);
         }
-        diffSelect.value = getDifficulty();
+        diffSelect.value = overrides.difficulty();
+        refreshDiffSelectLock();
         diffSelect.addEventListener('change', () => {
             setDifficulty(diffSelect.value);
             onDifficultyChanged();
@@ -1396,7 +1458,13 @@ import { createScorer } from './scoring.js';
         refreshButtonState();
     }
 
-    async function onSongLoaded(song) {
+    function onSongLoaded(song) {
+        songLoadFor = song && song.filename;
+        songLoad = loadSong(song);
+        return songLoad;
+    }
+
+    async function loadSong(song) {
         resetForNewSong(song);
         ensureToggleButton();
         refreshButtonState();
@@ -1917,8 +1985,53 @@ import { createScorer } from './scoring.js';
         sinkId: micCtx && 'sinkId' in micCtx ? micCtx.sinkId : null,
         monitorGain: monitorGain ? monitorGain.gain.value : null,
         trackState: micStream ? micStream.getAudioTracks().map((t) => ({ label: t.label, enabled: t.enabled, muted: t.muted, readyState: t.readyState })) : null,
+        difficulty: overrides.difficulty(),
+        hearMyself: overrides.hearMyself(),
+        scoreHudHidden: overrides.scoreHudHidden(),
+        stripHosted: resolveHost() !== document.getElementById('player'),
         ...diag,
     });
+
+    // Public API for other plugins (Build-a-Band). See README.md.
+    window.lyricsKaraoke = createKaraokeApi({
+        overrides,
+        mountStrip(el) {
+            stripHost = el;
+            if (!overlayEl) return;
+            const host = resolveHost();
+            if (!host) return;
+            placeOverlay(host);
+            sizeCanvas();
+        },
+        setKaraokeMode: apiSetKaraokeMode,
+        isKaraokeMode: () => karaokeMode,
+        startMic,
+        stopMic: () => { if (micState !== 'off') { stopMic({ keepFlag: true }); resetUserResults(); } },
+        getMicState: () => micState,
+        onDifficultyChanged,
+        applyHearMyself,
+        getSnapshot: () => (scorer ? scorer.snapshot() : null),
+    });
+
+    // Turn karaoke mode on once the current song's status and pitch data
+    // are in (song:ready can beat karaoke's own song:loaded fetches).
+    async function apiSetKaraokeMode(on) {
+        if (!on) {
+            setKaraokeMode(false);
+            return karaokeMode;
+        }
+        const filename = currentSong && currentSong.filename;
+        if (!filename) return false;
+        try { await songLoad; } catch (_) { /* its own error path */ }
+        if (!currentSong || currentSong.filename !== filename) return false;
+        if (!status || !status.has_pitch) return false;
+        if (!pitchData) {
+            await fetchPitchData(filename);
+            if (!currentSong || currentSong.filename !== filename) return false;
+        }
+        setKaraokeMode(!!pitchData);
+        return karaokeMode;
+    }
 
     // Expose setup-screen API for inline onclick= handlers.
     window.lkSearchSongs = lkSearchSongs;
@@ -2042,12 +2155,22 @@ import { createScorer } from './scoring.js';
 
     // Difficulty changes mid-song start scoring over at the new level.
     function onDifficultyChanged() {
-        const d = getDifficulty();
+        const d = overrides.difficulty();
         if (diffSelect && diffSelect.value !== d) diffSelect.value = d;
+        refreshDiffSelectLock();
         const setSel = document.getElementById('lk-set-difficulty');
         if (setSel && setSel.value !== d) setSel.value = d;
         rebuildScorer();
         resetUserResults();
+    }
+
+    // While a host's difficulty override is active the player's picker
+    // shows it and can't change it.
+    function refreshDiffSelectLock() {
+        if (!diffSelect) return;
+        const locked = overrides.hasDifficulty();
+        diffSelect.disabled = locked;
+        diffSelect.title = locked ? 'Set on the band screen' : 'Vocal difficulty';
     }
 
     // ══════════════════════════════════════════════════════════════════
@@ -2066,10 +2189,13 @@ import { createScorer } from './scoring.js';
             // backward start a new scoring pass; forward seeks skip phrases.
             window.slopsmith.on('song:seek', (e) => {
                 const to = Number(e && e.detail && e.detail.to);
-                if (!scorer || !Number.isFinite(to)) return;
-                scorer.seek(to - (micLatencyMs / 1000) * getPlaybackRate());
-                lastRating = null;
-                micLastCapturedAt = -Infinity;
+                if (!Number.isFinite(to)) return;
+                if (scorer) {
+                    scorer.seek(to - (micLatencyMs / 1000) * getPlaybackRate());
+                    lastRating = null;
+                    micLastCapturedAt = -Infinity;
+                }
+                busEmit(RESET_EVENT, scorer ? scorer.snapshot() : null);
             });
             // Catch-up: plugin scripts load after app.js, so the very
             // first `song:loaded` may have already fired by the time

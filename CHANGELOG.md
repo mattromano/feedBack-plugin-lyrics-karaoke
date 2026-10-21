@@ -3,6 +3,10 @@
 ## [Unreleased]
 
 ### Added
+- `window.lyricsKaraoke` lets other plugins (Build-a-Band) mount the karaoke strip in their
+  own layout, turn karaoke and the mic on, set a session difficulty and hear-myself that
+  are never saved, hide the score pill, and follow scoring through `karaoke:phrase` and
+  `karaoke:reset` events. See README.md.
 - Hear yourself: while the karaoke mic is on, your voice plays through the same device
   as the game's audio (not forced into a headset), with a 🔊 volume slider next to the
   mic picker and a limiter so loud notes don't clip. The slider boosts (50% = +12 dB,
