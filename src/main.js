@@ -50,6 +50,7 @@ import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './ap
     let inflightFetch = 0;           // monotonic token; stale fetches drop their result
     let songLoad = null;             // onSongLoaded's in-flight body, awaited by the API's setKaraokeMode
     let songLoadFor = null;          // filename songLoad is loading
+    let freshLoad = false;           // song:loading seen: the next song:loaded is a new play, never a switch
     // Session overrides another plugin (Build-a-Band) sets through
     // window.lyricsKaraoke. Never persisted; null clears.
     const overrides = createSessionOverrides({ getSavedDifficulty });
@@ -1475,21 +1476,25 @@ import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './ap
         refreshButtonState();
     }
 
+    // An arrangement or drum-part switch re-emits song:loaded for the same
+    // file without a song:loading first. Karaoke's data (status, pitch,
+    // scorer) is per file, so that keeps karaoke mode, the strip and the mic;
+    // only the song info is refreshed. A fresh play (song:loading), even a
+    // replay of the same file, always resets.
+    function isArrangementSwitch(song, fresh) {
+        return !fresh && !!(song && currentSong && song.filename && song.filename === currentSong.filename);
+    }
+
     function onSongLoaded(song) {
+        const fresh = freshLoad;
+        freshLoad = false;
         songLoadFor = song && song.filename;
-        songLoad = loadSong(song);
+        songLoad = loadSong(song, fresh);
         return songLoad;
     }
 
-    // An arrangement or drum-part switch re-emits song:loaded for the same
-    // file. Karaoke's data (status, pitch, scorer) is per file, so that keeps
-    // karaoke mode, the strip and the mic; only the song info is refreshed.
-    function isSameSong(song) {
-        return !!(song && currentSong && song.filename && song.filename === currentSong.filename);
-    }
-
-    async function loadSong(song) {
-        if (isSameSong(song)) currentSong = song;
+    async function loadSong(song, fresh) {
+        if (isArrangementSwitch(song, fresh)) currentSong = song;
         else resetForNewSong(song);
         ensureToggleButton();
         refreshButtonState();
@@ -2226,6 +2231,9 @@ import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT } from './ap
             // window.slopsmith is an EventTarget; .on() forwards to
             // addEventListener, so the handler receives a CustomEvent
             // whose `.detail` is the actual payload (the song info).
+            // Core emits song:loading on every fresh playSong, never on an
+            // arrangement or drum-part switch.
+            window.slopsmith.on('song:loading', () => { freshLoad = true; });
             window.slopsmith.on('song:loaded', (e) => onSongLoaded(e && e.detail));
             // Core's single repositioning funnel ({from, to, reason}). Seeks
             // backward start a new scoring pass; forward seeks skip phrases.

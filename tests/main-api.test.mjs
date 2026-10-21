@@ -80,6 +80,12 @@ const slopsmith = {
     emit() {},
 };
 const loadSong = (song) => handlers.get('song:loaded')({ detail: song });
+// A fresh playSong: core emits song:loading first (an arrangement switch doesn't).
+const playSong = (song) => {
+    const onLoading = handlers.get('song:loading');
+    if (onLoading) onLoading({ detail: { filename: song.filename, arrangement: null } });
+    return loadSong(song);
+};
 
 Object.assign(globalThis, {
     window: globalThis,
@@ -259,4 +265,38 @@ test('the voice-volume slider is disabled while hear-myself is overridden off', 
     api.setHearMyself(false);
     assert.equal(api.setHearMyself(null), true);
     assert.equal(slider.disabled, false);
+});
+
+test('a replay of the same file (song:loading first) resets the mic intent, karaoke mode and the song data', async () => {
+    localStorage.setItem('lyrics_karaoke.deviceId', 'mic-1');
+    await playSong(SONG);
+    try {
+        assert.equal(await api.setKaraokeMode(true), true);
+        assert.equal(await api.startMic(), 'listening');
+        assert.equal(lyricsKaraokeDiag().micWantOnForSong, true);
+        const n = fetched.length;
+
+        await playSong(SONG);
+        assert.equal(api.isKaraokeMode(), false);
+        assert.equal(api.getMicState(), 'off');
+        assert.equal(lyricsKaraokeDiag().micWantOnForSong, false);
+        assert.equal(overlayIn(player), undefined);
+        assert.equal(fetched.length, n + 2, 'status and pitch re-fetched: a new scorer');
+
+        // Karaoke back on for the replay opens no mic from the previous play.
+        assert.equal(await api.setKaraokeMode(true), true);
+        await tick();
+        assert.equal(api.getMicState(), 'off');
+
+        // An arrangement switch after the replay still keeps everything.
+        assert.equal(await api.startMic(), 'listening');
+        const m = fetched.length;
+        await loadSong({ ...SONG, arrangement: 'Bass' });
+        assert.equal(api.isKaraokeMode(), true);
+        assert.equal(api.getMicState(), 'listening');
+        assert.equal(fetched.length, m);
+    } finally {
+        api.stopMic();
+        await api.setKaraokeMode(false);
+    }
 });
