@@ -189,3 +189,24 @@ def test_format_lrc_skips_malformed_segments():
 
 def test_format_lrc_empty_segments_yields_trailing_newline_only():
     assert routes._format_lrc([]) == "\n"
+
+
+def test_apply_note_lengths_copies_longer_durations_onto_matching_lyrics():
+    lyrics = [{"t": 1.0, "d": 0.3, "w": "Hold"}, {"t": 2.0, "d": 0.5, "w": "on", "extra": 1}]
+    notes = [{"t": 1.0, "d": 0.9, "midi": 57}, {"t": 2.0, "d": 0.4, "midi": 60}]
+    out, changed = routes._apply_note_lengths(lyrics, notes)
+    assert changed == 1
+    assert out[0] == {"t": 1.0, "d": 0.9, "w": "Hold"}
+    assert out[1] == {"t": 2.0, "d": 0.5, "w": "on", "extra": 1}, "never shortened, other keys kept"
+    assert lyrics[0]["d"] == 0.3, "input not mutated"
+
+
+def test_persist_pitch_lengthens_the_packs_lyrics_too(tmp_path):
+    # The in-app "Build Karaoke" save: the game reads timing from lyrics.json,
+    # so the held-note extension must land there as well as in the pitch file.
+    (tmp_path / "manifest.yaml").write_text("title: T\nlyrics: lyrics.json\n")
+    (tmp_path / "lyrics.json").write_text(json.dumps([{"t": 1.0, "d": 0.3, "w": "Hold"}]))
+    manifest = routes._read_manifest(tmp_path)
+    routes._persist_pitch(tmp_path, manifest, [{"t": 1.0, "d": 0.9, "midi": 57}], tmp_path, False)
+    assert json.loads((tmp_path / "lyrics.json").read_text()) == [{"t": 1.0, "d": 0.9, "w": "Hold"}]
+    assert json.loads((tmp_path / "vocal_pitch.json").read_text())["notes"][0]["d"] == 0.9

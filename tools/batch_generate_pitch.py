@@ -6,9 +6,11 @@ Runs the same local pYIN extractor as the in-app "Generate Karaoke" button
 and synced lyrics but no pitch yet, and writes the result into the archive.
 
 Before an archive is rewritten, its original manifest is saved under
---backup-dir/<path relative to --dlc>/manifest.yaml. The only changes to an
-archive are the added vocal_pitch.json and the manifest's `vocal_pitch` key,
-so `--restore` can undo a run exactly from those manifests.
+--backup-dir/<path relative to --dlc>/manifest.yaml, with its lyrics file next
+to it (lyrics.original.json). The only changes to an archive are the added
+vocal_pitch.json, the manifest's `vocal_pitch` key, and longer durations on
+lyrics whose held notes the extractor extended, so `--restore` can undo a run
+exactly from those backups.
 
 --regenerate re-extracts songs that already have auto pitch (after an extractor
 improvement), never hand-charted ones (`lyrics_source: authored`). The previous
@@ -49,6 +51,7 @@ finally:
 
 MANIFEST_NAMES = ("manifest.yaml", "manifest.yml")
 PITCH_NAME = "vocal_pitch.json"
+LYRICS_BACKUP = "lyrics.original.json"   # backup copy of the pack's lyrics file
 
 
 def _manifest_name(zf: zipfile.ZipFile) -> str | None:
@@ -108,16 +111,22 @@ def inspect_sloppak(path: Path, regenerate: bool = False) -> dict:
         return {"eligible": False, "reason": "not a zip sloppak"}
 
 
-def _rewrite(path: Path, manifest_bytes: bytes, pitch_bytes: bytes | None) -> None:
-    """Rewrite the archive with a new manifest and (optionally) pitch file.
-    Every other entry is copied byte-for-byte with its original compression.
-    Written to a temp file next to the archive, verified, then swapped in."""
+def _rewrite(path: Path, manifest_bytes: bytes, pitch_bytes: bytes | None,
+             replace: dict[str, bytes] | None = None) -> None:
+    """Rewrite the archive with a new manifest, (optionally) a pitch file, and
+    any entries in `replace` swapped for new bytes. Every other entry is copied
+    byte-for-byte with its original compression. Written to a temp file next
+    to the archive, verified, then swapped in."""
+    replace = replace or {}
     tmp = path.with_suffix(path.suffix + ".tmp")
     try:
         with zipfile.ZipFile(path) as zin, zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
             mname = _manifest_name(zin) or "manifest.yaml"
             for info in zin.infolist():
                 if info.filename in (mname, PITCH_NAME):
+                    continue
+                if info.filename in replace:
+                    zout.writestr(info, replace.pop(info.filename))
                     continue
                 zout.writestr(info, zin.read(info))
             zout.writestr(mname, manifest_bytes)
@@ -134,12 +143,25 @@ def _rewrite(path: Path, manifest_bytes: bytes, pitch_bytes: bytes | None) -> No
 
 
 def write_pitch_into_sloppak(path: Path, notes: list[dict]) -> None:
+    import routes  # noqa: WPS433 — the same lyrics-length rule as the in-app save
+
+    replace = {}
     with zipfile.ZipFile(path) as zf:
         manifest = yaml.safe_load(zf.read(_manifest_name(zf))) or {}
+        lrel = str(manifest.get("lyrics") or "")
+        if lrel and lrel in zf.namelist():
+            try:
+                lyrics_raw = json.loads(zf.read(lrel).decode("utf-8"))
+            except Exception:  # noqa: BLE001 — unreadable lyrics: leave them alone
+                lyrics_raw = None
+            if isinstance(lyrics_raw, list):
+                updated, changed = routes._apply_note_lengths(lyrics_raw, notes)
+                if changed:
+                    replace[lrel] = json.dumps(updated, ensure_ascii=False).encode("utf-8")
     manifest["vocal_pitch"] = PITCH_NAME
     manifest_bytes = yaml.safe_dump(manifest, sort_keys=False, allow_unicode=True).encode("utf-8")
     pitch_bytes = json.dumps({"version": 1, "notes": notes}, indent=2, ensure_ascii=False).encode("utf-8")
-    _rewrite(path, manifest_bytes, pitch_bytes)
+    _rewrite(path, manifest_bytes, pitch_bytes, replace)
 
 
 def _backup_path(path: Path, dlc_root: Path, backup_root: Path) -> Path:
@@ -147,24 +169,35 @@ def _backup_path(path: Path, dlc_root: Path, backup_root: Path) -> Path:
 
 
 def backup_manifest(path: Path, dlc_root: Path, backup_root: Path) -> Path:
-    """Save the archive's original manifest once (never overwritten), and its
-    existing vocal_pitch.json alongside when a --regenerate run replaces it."""
+    """Save the archive's original manifest once (never overwritten), its
+    existing vocal_pitch.json when a --regenerate run replaces it, and its
+    lyrics file, whose durations the held-note extension may lengthen."""
     dest = _backup_path(path, dlc_root, backup_root)
     if not dest.exists():
         dest.parent.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(path) as zf:
-            dest.write_bytes(zf.read(_manifest_name(zf)))
-            if PITCH_NAME in zf.namelist():
+            manifest_bytes = zf.read(_manifest_name(zf))
+            names = set(zf.namelist())
+            if PITCH_NAME in names:
                 (dest.parent / PITCH_NAME).write_bytes(zf.read(PITCH_NAME))
+            lrel = str((yaml.safe_load(manifest_bytes) or {}).get("lyrics") or "")
+            if lrel and lrel in names:
+                (dest.parent / LYRICS_BACKUP).write_bytes(zf.read(lrel))
+            dest.write_bytes(manifest_bytes)   # last: its presence marks a complete backup
     return dest
 
 
 def restore_sloppak(path: Path, dlc_root: Path, backup_root: Path) -> None:
-    """Undo a run: put the saved manifest back, and the saved vocal_pitch.json
-    if the archive had one before (otherwise drop it)."""
+    """Undo a run: put the saved manifest and lyrics back, and the saved
+    vocal_pitch.json if the archive had one before (otherwise drop it)."""
     saved = _backup_path(path, dlc_root, backup_root)
     old_pitch = saved.parent / PITCH_NAME
-    _rewrite(path, saved.read_bytes(), old_pitch.read_bytes() if old_pitch.exists() else None)
+    old_lyrics = saved.parent / LYRICS_BACKUP
+    replace = {}
+    lrel = str((yaml.safe_load(saved.read_bytes()) or {}).get("lyrics") or "")
+    if lrel and old_lyrics.exists():
+        replace[lrel] = old_lyrics.read_bytes()
+    _rewrite(path, saved.read_bytes(), old_pitch.read_bytes() if old_pitch.exists() else None, replace)
 
 
 def process_one(path_str: str, dlc_root: str, backup_root: str, regenerate: bool = False) -> dict:

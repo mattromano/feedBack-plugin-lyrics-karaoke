@@ -77,3 +77,26 @@ def test_high_notes_above_the_singers_centre_keep_their_octave(tmp_path):
                                             *verse, (None, 0.3, 0)])
     out = routes._extract_pitch_per_syllable(path, lyrics)
     assert [o["midi"] for o in out[8:12]] == [59] * 4, out[8:12]
+
+
+def test_held_note_is_extended_to_where_the_voice_stops(tmp_path):
+    # Rocksmith often charts a held note as a short syllable: here the voice
+    # holds A3 for 1.0 s but the lyric says 0.3 s. Without the extension the
+    # last 0.7 s of singing has no target at all.
+    path, lyrics = _write_vocals(tmp_path, [(None, 0.3, 0), (57, 1.0, 0.5), (None, 0.4, 0),
+                                            (62, 0.5, 0.5), (None, 0.3, 0)])
+    lyrics[0]["d"] = 0.3
+    out = routes._extract_pitch_per_syllable(path, lyrics)
+    assert out[0]["t"] == lyrics[0]["t"], "start times never move (pitch pairs with lyrics by t)"
+    assert out[0]["d"] >= 0.85, out[0]
+    assert out[0]["t"] + out[0]["d"] <= out[1]["t"], "never runs into the next syllable"
+
+
+def test_extension_never_shortens_a_syllable(tmp_path):
+    path, lyrics = _write_vocals(tmp_path, [(None, 0.3, 0), (57, 0.4, 0.5), (None, 0.6, 0),
+                                            (62, 0.5, 0.5), (None, 0.3, 0)])
+    lyrics[0]["d"] = 0.8      # charted longer than the voice: keep the charted length
+    out = routes._extract_pitch_per_syllable(path, lyrics)
+    # Never shorter; pYIN's window may carry voicing a few ms past the note,
+    # but nothing stretches it across the 0.6 s of silence that follows.
+    assert 0.8 <= out[0]["d"] < 0.85, out[0]

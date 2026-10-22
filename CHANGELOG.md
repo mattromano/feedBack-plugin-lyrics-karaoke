@@ -52,6 +52,13 @@
   instead of one, so those notes stop being reported an octave low. Against the same
   charts, target bars in the right octave go from 79% to 81% and notes within a
   semitone from 86% to 87%, with no song worse.
+- Held notes keep their target: Rocksmith-timed lyrics often chart a held note as a short
+  syllable, so the rest of the note had no target and wasn't scored. Generating pitch
+  now extends each syllable through the voice that's still sounding, up to the next
+  syllable, and writes the longer durations to `lyrics.json` as well as
+  `vocal_pitch.json` (start times never move). On 14 library songs that also have
+  Rock Band charts, sung time with no target drops from 12.8% to 7.3%, and sung time
+  with the right target rises from 72.6% to 77.2%.
 
 ## [1.5.0] - 2026-10-16
 
