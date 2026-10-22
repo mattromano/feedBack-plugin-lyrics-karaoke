@@ -29,7 +29,7 @@ import {
 import { buildPhrases } from './phrases.js';
 import { createScorer } from './scoring.js';
 import { createSessionOverrides } from './overrides.js';
-import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT, OD_EVENTS } from './api.js';
+import { createKaraokeApi, stripHostStyle, emitScoring, RESET_EVENT, OD_EVENTS, sameFile, registerKaraokePlayAs } from './api.js';
 import { createMeasureClock } from './measure.js';
 import { createVocalOverdrive, retireOverdrive } from './overdrive.js';
 import { createMicHitDetector, levelDb, DEFAULT_MIC_HIT_DB } from './mic-hit.js';
@@ -2181,7 +2181,29 @@ import { createMicHitDetector, levelDb, DEFAULT_MIC_HIT_DB } from './mic-hit.js'
         getSnapshot: () => (scorer ? scorer.snapshot() : null),
         getOverdrive,
         applyMicHitThreshold,
+        playKaraoke,
     });
+
+    // "Play as" Vocals (core's library menus) and lyricsKaraoke.playKaraoke:
+    // play the song, then turn karaoke mode on when it has loaded. The mic
+    // stays the singer's to start, as on any karaoke toggle.
+    let karaokeNext = null;   // the unencoded filename to open in karaoke mode
+    function playKaraoke(filename) {
+        if (typeof filename !== 'string' || !filename) return false;
+        const fb = window.feedBack || window.slopsmith;
+        karaokeNext = filename;
+        let ok = false;
+        if (fb && fb.ui && typeof fb.ui.playSongAs === 'function') ok = fb.ui.playSongAs(filename) !== false;
+        else if (typeof window.playSong === 'function') { window.playSong(encodeURIComponent(filename)); ok = true; }
+        if (!ok) karaokeNext = null;
+        return ok;
+    }
+    function karaokeOnLoad() {
+        const want = karaokeNext;
+        karaokeNext = null;
+        if (!want || !currentSong || !sameFile(currentSong.filename, want)) return;
+        apiSetKaraokeMode(true).catch((e) => console.warn('[lyrics_karaoke] karaoke mode on load failed:', e));
+    }
 
     // Turn karaoke mode on once the current song's status and pitch data
     // are in (song:ready can beat karaoke's own song:loaded fetches).
@@ -2360,6 +2382,7 @@ import { createMicHitDetector, levelDb, DEFAULT_MIC_HIT_DB } from './mic-hit.js'
     function init() {
         ensureToggleButton();
         hydrateSettings();
+        registerKaraokePlayAs(window.feedBack || window.slopsmith, playKaraoke);
         if (window.slopsmith && typeof window.slopsmith.on === 'function') {
             // window.slopsmith is an EventTarget; .on() forwards to
             // addEventListener, so the handler receives a CustomEvent
@@ -2367,7 +2390,11 @@ import { createMicHitDetector, levelDb, DEFAULT_MIC_HIT_DB } from './mic-hit.js'
             // Core emits song:loading on every fresh playSong, never on an
             // arrangement or drum-part switch.
             window.slopsmith.on('song:loading', () => { freshLoad = true; });
-            window.slopsmith.on('song:loaded', (e) => onSongLoaded(e && e.detail));
+            window.slopsmith.on('song:loaded', (e) => {
+                const loaded = onSongLoaded(e && e.detail);
+                karaokeOnLoad();
+                return loaded;
+            });
             // Core's beats for the playing song arrive after song:loaded; the
             // overdrive meter keeps its fill and drains on the real measures.
             window.slopsmith.on('beats:loaded', () => refreshOdClock());

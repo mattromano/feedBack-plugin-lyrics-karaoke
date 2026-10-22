@@ -22,6 +22,7 @@ object is missing when the plugin is disabled or hasn't loaded yet.
 | `apiVersion` | `1` | API version. |
 | `mountStrip(el \| null)` | `boolean` | Draws the karaoke strip inside `el`, filling it. `null` puts it back in the player (below the HUD row, 140 px tall). A host that is later removed from the page counts as `null`. Returns `false` for anything that isn't an element or `null`. |
 | `setKaraokeMode(on)` | `Promise<boolean>` | Turns karaoke on or off for the current song. Turning it on waits for the song's karaoke data; it resolves `false` if the song has no vocal pitch or changed meanwhile. Resolves the resulting mode. |
+| `playKaraoke(filename)` | `boolean` | Plays a library song (unencoded filename) through core's `feedBack.ui.playSongAs` and turns karaoke mode on once it has loaded; the mic stays the singer's to start. `false` when nothing could play. The plugin's **Play as** entry (core `libraryCardActions`, placement `play-as`: Vocals, on songs with vocal pitch) uses it. |
 | `isKaraokeMode()` | `boolean` | Whether karaoke is on. |
 | `startMic()` | `Promise<string>` | Opens the mic picked in karaoke's settings (`lyrics_karaoke.deviceId`) and resolves the mic state. With no mic picked it resolves `'error'` without prompting or focusing karaoke's picker (show your own message). It never writes karaoke's saved mic on/off flag. |
 | `stopMic()` | `void` | Closes the mic and resets the score. It also ends the mic for the song, so turning karaoke back on later doesn't reopen it. Karaoke's saved mic on/off flag is left alone. |

@@ -332,3 +332,30 @@ test('beats:loaded after the pitch data swaps the overdrive clock to the real me
         delete globalThis.highway;
     }
 });
+
+test('playKaraoke plays through core playSongAs and turns karaoke mode on once the song loads', async () => {
+    const asked = [];
+    slopsmith.ui = {
+        playSongAs(filename) {
+            asked.push(filename);
+            // Core encodes the name for playSong; the loaded song carries it as core reports it.
+            Promise.resolve().then(() => playSong({ filename: encodeURIComponent('Sing It.sloppak'), format: 'sloppak' }));
+            return true;
+        },
+    };
+    try {
+        assert.equal(api.isKaraokeMode(), false);
+        assert.equal(api.playKaraoke('Sing It.sloppak'), true);
+        assert.deepEqual(asked, ['Sing It.sloppak']);
+        for (let i = 0; i < 20 && !api.isKaraokeMode(); i++) await tick();
+        assert.equal(api.isKaraokeMode(), true);
+        assert.equal(api.getMicState(), 'off', 'the mic stays the singer\'s to start');
+        // The next song is a normal play: no karaoke mode carried over.
+        await playSong(OTHER);
+        assert.equal(api.isKaraokeMode(), false);
+        assert.equal(api.playKaraoke(''), false);
+    } finally {
+        delete slopsmith.ui;
+        await api.setKaraokeMode(false);
+    }
+});
