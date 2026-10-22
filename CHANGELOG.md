@@ -60,6 +60,9 @@
   Rock Band charts, sung time with no target drops from 12.8% to 7.3%, and sung time
   with the right target rises from 72.6% to 77.2%.
 
+### Changed
+- Docs and tests name RockHeroSmith (formerly Build-a-Band; screen `plugin-rockherosmith`).
+
 ## [1.5.0] - 2026-10-16
 
 ### Added

@@ -13,7 +13,7 @@ A feedBack plugin for karaoke-style synced lyrics during playback.
 
 ## Plugin API (`window.lyricsKaraoke`)
 
-Other plugins (Build-a-Band) drive karaoke through `window.lyricsKaraoke`. Check
+Other plugins (RockHeroSmith) drive karaoke through `window.lyricsKaraoke`. Check
 `window.lyricsKaraoke && window.lyricsKaraoke.apiVersion >= 1` before using it: the
 object is missing when the plugin is disabled or hasn't loaded yet.
 

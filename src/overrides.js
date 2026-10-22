@@ -1,5 +1,5 @@
 /**
- * Session overrides another plugin (Build-a-Band) can set on karaoke: vocal
+ * Session overrides another plugin (RockHeroSmith) can set on karaoke: vocal
  * difficulty, hear-myself (the voice monitor), hiding the score pill and the
  * mic-hit threshold that deploys overdrive. They
  * are never persisted; `null` clears an override back to karaoke's own value.

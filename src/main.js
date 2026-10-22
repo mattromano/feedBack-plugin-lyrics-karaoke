@@ -61,7 +61,7 @@ import { createMicHitDetector, levelDb, DEFAULT_MIC_HIT_DB } from './mic-hit.js'
     let songLoad = null;             // onSongLoaded's in-flight body, awaited by the API's setKaraokeMode
     let songLoadFor = null;          // filename songLoad is loading
     let freshLoad = false;           // song:loading seen: the next song:loaded is a new play, never a switch
-    // Session overrides another plugin (Build-a-Band) sets through
+    // Session overrides another plugin (RockHeroSmith) sets through
     // window.lyricsKaraoke. Never persisted; null clears.
     const overrides = createSessionOverrides({ getSavedDifficulty });
 
@@ -832,7 +832,7 @@ import { createMicHitDetector, levelDb, DEFAULT_MIC_HIT_DB } from './mic-hit.js'
         ctx.save();
         ctx.textBaseline = 'top';
         ctx.textAlign = 'left';
-        // A host with its own score display (Build-a-Band) hides the pill and
+        // A host with its own score display (RockHeroSmith) hides the pill and
         // the overdrive meter; warnings and ratings keep their places.
         const hudShown = !overrides.scoreHudHidden();
         // The overdrive bar sits under the pill; warnings move down to clear it.
@@ -945,7 +945,7 @@ import { createMicHitDetector, levelDb, DEFAULT_MIC_HIT_DB } from './mic-hit.js'
     const _LK_STORAGE_KEY = 'lyrics_karaoke.micFeedback';
     const _LK_RATING_SHOW_MS = 1200;
     const _LK_OD_FLASH_MS = 1200;     // "Overdrive!" flash after a deploy
-    const _LK_OD_COLOR = '#5cc8ff';   // overdrive blue, as Build-a-Band's
+    const _LK_OD_COLOR = '#5cc8ff';   // overdrive blue, as RockHeroSmith's
     const _LK_RATING_COLORS = {
         Awesome: '#ffe080', Strong: '#ffe080',
         Good: '#9be7a0', OK: '#9be7a0',
@@ -2153,7 +2153,7 @@ import { createMicHitDetector, levelDb, DEFAULT_MIC_HIT_DB } from './mic-hit.js'
         ...diag,
     });
 
-    // Public API for other plugins (Build-a-Band). See README.md.
+    // Public API for other plugins (RockHeroSmith). See README.md.
     window.lyricsKaraoke = createKaraokeApi({
         overrides,
         mountStrip(el) {

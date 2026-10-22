@@ -2,7 +2,7 @@
  * Mic-hit detector: a clap or shout into the mic, used to deploy overdrive.
  * It only reads frame levels (dBFS numbers); it never touches audio nodes or
  * any output. Pure — no DOM, no Web Audio — so Node tests and the
- * Build-a-Band sensitivity check share this exact rule.
+ * RockHeroSmith sensitivity check share this exact rule.
  *
  * A hit: level ≥ threshold AND level − previous frame's level ≥ the rise
  * (25 dB) AND at least the refractory time since the last hit. The first
