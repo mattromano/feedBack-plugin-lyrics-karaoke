@@ -210,3 +210,29 @@ test('getOverdrive forwards the live meter', () => {
     assert.deepEqual(createKaraokeApi(deps).getOverdrive(), { fill: 0.5, active: false, ready: true });
     assert.equal(typeof api.getOverdrive, 'function');
 });
+
+test('sameFile matches a name with its URL-encoded form', async () => {
+    const { sameFile } = await import('../src/api.js');
+    assert.equal(sameFile('A B.sloppak', 'A%20B.sloppak'), true);
+    assert.equal(sameFile('A B.sloppak', 'A B.sloppak'), true);
+    assert.equal(sameFile('A.sloppak', 'B.sloppak'), false);
+    assert.equal(sameFile('', ''), false);
+    assert.equal(sameFile('%E0%A4%A', '%E0%A4%A'), true);   // malformed escapes compare raw
+});
+
+test('registerKaraokePlayAs adds a Vocals entry for songs with vocal pitch', async () => {
+    const { registerKaraokePlayAs } = await import('../src/api.js');
+    const specs = [];
+    const played = [];
+    const off = registerKaraokePlayAs({ libraryCardActions: { register: (s) => { specs.push(s); return () => 'off'; } } },
+        (fn) => { played.push(fn); return true; });
+    assert.equal(off(), 'off');
+    const s = specs[0];
+    assert.equal(s.id, 'lyrics_karaoke.play-as');
+    assert.equal(s.placement, 'play-as');
+    assert.equal(s.applies({ filename: 'a', has_vocal_pitch: true }), true);
+    assert.equal(s.applies({ filename: 'a', has_vocal_pitch: false }), false);
+    s.run({ filename: 'a b' });
+    assert.deepEqual(played, ['a b']);
+    assert.equal(registerKaraokePlayAs({}, () => {}), null);
+});

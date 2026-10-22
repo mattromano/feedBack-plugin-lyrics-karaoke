@@ -105,5 +105,30 @@ export function createKaraokeApi(deps) {
         },
         getMicHitThreshold: () => overrides.micHitDb() ?? DEFAULT_MIC_HIT_DB,
         micHit: MIC_HIT,
+        // Play a library song (unencoded filename) and open it in karaoke mode once loaded.
+        playKaraoke: (filename) => (typeof deps.playKaraoke === 'function' ? deps.playKaraoke(filename) : false),
+    });
+}
+
+/** Same library file, whether either name is URL-encoded or not. */
+export function sameFile(a, b) {
+    if (typeof a !== 'string' || typeof b !== 'string' || !a || !b) return false;
+    const dec = (s) => { try { return decodeURIComponent(s); } catch { return s; } };
+    return a === b || dec(a) === dec(b);
+}
+
+/**
+ * Register the Vocals entry of core's "Play as" menus (libraryCardActions,
+ * placement 'play-as') for songs with vocal pitch. `play(filename)` starts it.
+ * Returns the unregister function, or null on a core without the registry.
+ */
+export function registerKaraokePlayAs(fb, play) {
+    const reg = fb && fb.libraryCardActions;
+    if (!reg || typeof reg.register !== 'function') return null;
+    return reg.register({
+        id: 'lyrics_karaoke.play-as', pluginId: 'lyrics_karaoke', label: 'Vocals', hint: 'karaoke · mic',
+        group: 'Vocals', placement: 'play-as', order: 35,
+        applies: (song) => !!(song && song.filename && song.has_vocal_pitch === true),
+        run: (song) => play(song.filename),
     });
 }

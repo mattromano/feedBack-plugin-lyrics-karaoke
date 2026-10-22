@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- **Play as** Vocals entry for core's library menus (`libraryCardActions`, placement `play-as`) on songs with vocal pitch, and `window.lyricsKaraoke.playKaraoke(filename)`: plays the song and turns karaoke mode on once it has loaded.
 - Vocal overdrive (KRB-8, YARG numbers; `src/yarg-overdrive.js` is LGPL-3.0, see NOTICE.md):
   phrases rated Strong or better earn a quarter bar, a clap or shout into the mic between
   sung phrases deploys it at half a bar or more, and phrase points double while it lasts (8 measures for a full bar).
